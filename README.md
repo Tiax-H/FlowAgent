@@ -2,7 +2,7 @@
 
 > MCP 原生的多模型 Agent 工作流运行时（Durable Agent Runtime）
 
-[![CI](https://github.com/OWNER/flowagent/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/flowagent/actions/workflows/ci.yml)
+[![CI](https://github.com/Tiax-H/FlowAgent/actions/workflows/ci.yml/badge.svg)](https://github.com/Tiax-H/FlowAgent/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-green.svg)](package.json)
 [![MCP](https://img.shields.io/badge/MCP-2026--07--28-orange.svg)](https://modelcontextprotocol.io)
@@ -41,8 +41,8 @@
 
 ```bash
 # 前置：Node >= 20, pnpm >= 9, Docker
-git clone https://github.com/OWNER/flowagent.git
-cd flowagent
+git clone https://github.com/Tiax-H/FlowAgent.git
+cd FlowAgent
 pnpm install
 cp .env.example .env        # 填入你的 LLM Provider 配置
 pnpm dev                    # 同时启动 server(:3000) 与 web(:5173)
