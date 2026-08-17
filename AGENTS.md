@@ -54,7 +54,7 @@ pnpm lint             # ESLint + Prettier
 
 ## 代码风格
 
-- 提交信息：Conventional Commits（`feat:` / `fix:` / `docs:` / `refactor:` / `test:` / `chore:`）
+- 提交信息：Conventional Commits 类型前缀 + 中文描述（如 `feat: 实现事件溯源存储`），类型含 `feat:` / `fix:` / `docs:` / `refactor:` / `test:` / `chore:`
 - 文件命名：组件 PascalCase，其余 camelCase/kebab-case 从包内既有惯例
 - 不写无关注释；公共 API 用 TSDoc
 - 每个包自带 Vitest；引擎核心（调度器、事件回放、恢复逻辑）改动必须带单测
