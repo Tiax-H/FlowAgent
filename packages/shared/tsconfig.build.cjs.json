@@ -1,7 +1,10 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "dist/esm",
+    "module": "commonjs",
+    "moduleResolution": "node10",
+    "verbatimModuleSyntax": false,
+    "outDir": "dist/cjs",
     "rootDir": "src",
     "declaration": true
   },
