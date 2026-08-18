@@ -21,9 +21,11 @@ export function McpServersPage() {
   const [tools, setTools] = useState<McpTool[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [transport, setTransport] = useState<'stdio' | 'http'>('stdio');
   const [name, setName] = useState('');
   const [command, setCommand] = useState('node');
   const [args, setArgs] = useState('');
+  const [url, setUrl] = useState('');
 
   const [invokeTarget, setInvokeTarget] = useState<McpTool | null>(null);
   const [invokeArgs, setInvokeArgs] = useState('{}');
@@ -57,14 +59,14 @@ export function McpServersPage() {
   async function handleCreate() {
     setBusy(true);
     try {
-      await mcpApi.createServer({
-        name: name.trim(),
-        transport: 'stdio',
-        command: command.trim(),
-        args: args.trim() || undefined,
-      });
+      await mcpApi.createServer(
+        transport === 'stdio'
+          ? { name: name.trim(), transport, command: command.trim(), args: args.trim() || undefined }
+          : { name: name.trim(), transport, url: url.trim() },
+      );
       setName('');
       setArgs('');
+      setUrl('');
       await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -106,35 +108,72 @@ export function McpServersPage() {
       {error && <p className="rounded bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
 
       <section className="rounded-lg border border-neutral-200 bg-white p-4">
-        <h2 className="mb-3 text-sm font-medium text-neutral-600">添加 stdio Server</h2>
-        <div className="grid grid-cols-[1fr_1fr_2fr_auto] gap-2">
-          <input
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="名称 (search)"
-            className="rounded border border-neutral-300 px-2 py-1.5 text-sm"
-          />
-          <input
-            value={command}
-            onChange={(event) => setCommand(event.target.value)}
-            placeholder="命令 (node)"
-            className="rounded border border-neutral-300 px-2 py-1.5 text-sm"
-          />
-          <input
-            value={args}
-            onChange={(event) => setArgs(event.target.value)}
-            placeholder="参数（绝对路径，如 /abs/path/servers/search/dist/index.js）"
-            className="rounded border border-neutral-300 px-2 py-1.5 text-sm"
-          />
-          <button
-            type="button"
-            disabled={busy || name.trim().length === 0 || command.trim().length === 0}
-            onClick={() => void handleCreate()}
-            className="rounded bg-neutral-900 px-3 py-1.5 text-sm text-white disabled:opacity-40"
-          >
-            添加并连接
-          </button>
+        <h2 className="mb-3 text-sm font-medium text-neutral-600">添加 Server</h2>
+        <div className="mb-3 flex gap-1">
+          {(['stdio', 'http'] as const).map((option) => (
+            <button
+              key={option}
+              type="button"
+              onClick={() => setTransport(option)}
+              className={`rounded px-3 py-1 text-sm ${transport === option ? 'bg-neutral-900 text-white' : 'border border-neutral-300 text-neutral-600 hover:bg-neutral-50'}`}
+            >
+              {option === 'stdio' ? 'stdio（本地进程）' : 'Streamable HTTP（远程）'}
+            </button>
+          ))}
         </div>
+        {transport === 'stdio' ? (
+          <div className="grid grid-cols-[1fr_1fr_2fr_auto] gap-2">
+            <input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="名称 (search)"
+              className="rounded border border-neutral-300 px-2 py-1.5 text-sm"
+            />
+            <input
+              value={command}
+              onChange={(event) => setCommand(event.target.value)}
+              placeholder="命令 (node)"
+              className="rounded border border-neutral-300 px-2 py-1.5 text-sm"
+            />
+            <input
+              value={args}
+              onChange={(event) => setArgs(event.target.value)}
+              placeholder="参数（绝对路径，如 /abs/path/servers/search/dist/index.js）"
+              className="rounded border border-neutral-300 px-2 py-1.5 text-sm"
+            />
+            <button
+              type="button"
+              disabled={busy || name.trim().length === 0 || command.trim().length === 0}
+              onClick={() => void handleCreate()}
+              className="rounded bg-neutral-900 px-3 py-1.5 text-sm text-white disabled:opacity-40"
+            >
+              添加并连接
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-[1fr_2fr_auto] gap-2">
+            <input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="名称 (remote-search)"
+              className="rounded border border-neutral-300 px-2 py-1.5 text-sm"
+            />
+            <input
+              value={url}
+              onChange={(event) => setUrl(event.target.value)}
+              placeholder="MCP 端点 (http://localhost:3100/mcp)"
+              className="rounded border border-neutral-300 px-2 py-1.5 text-sm"
+            />
+            <button
+              type="button"
+              disabled={busy || name.trim().length === 0 || url.trim().length === 0}
+              onClick={() => void handleCreate()}
+              className="rounded bg-neutral-900 px-3 py-1.5 text-sm text-white disabled:opacity-40"
+            >
+              添加并连接
+            </button>
+          </div>
+        )}
       </section>
 
       <section className="space-y-3">

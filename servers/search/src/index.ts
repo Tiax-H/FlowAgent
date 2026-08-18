@@ -1,39 +1,25 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { z } from 'zod';
 
-import { fetchPage, webSearch } from './tools.js';
+import { startHttpServer } from './http.js';
+import { createServer } from './setup.js';
 
-const server = new McpServer({ name: 'flowagent-search', version: '0.1.0' });
-
-server.registerTool(
-  'web_search',
-  {
-    title: '网页搜索',
-    description: '按关键词搜索网页，返回标题/链接/摘要（确定性假数据，离线可用）',
-    inputSchema: {
-      query: z.string().describe('搜索关键词'),
-      limit: z.number().optional().describe('返回条数，默认 3'),
-    },
-  },
-  async ({ query, limit }) => ({
-    content: [{ type: 'text', text: JSON.stringify(webSearch(query, limit ?? 3), null, 2) }],
-  }),
-);
-
-server.registerTool(
-  'fetch_page',
-  {
-    title: '抓取页面',
-    description: '按 URL 抓取页面正文（仅收录 demo 已知页面）',
-    inputSchema: { url: z.string().describe('页面 URL') },
-  },
-  async ({ url }) => ({
-    content: [{ type: 'text', text: fetchPage(url) }],
-  }),
-);
+function parseArgs(argv: string[]): { http: boolean; port: number } {
+  const http = argv.includes('--http');
+  const portIndex = argv.indexOf('--port');
+  const portArg = portIndex >= 0 ? argv[portIndex + 1] : undefined;
+  const port = portArg !== undefined && /^\d+$/.test(portArg) ? Number(portArg) : 3100;
+  return { http, port };
+}
 
 async function main(): Promise<void> {
+  const { http, port } = parseArgs(process.argv.slice(2));
+
+  if (http) {
+    startHttpServer(port);
+    return;
+  }
+
+  const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
