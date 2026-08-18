@@ -1,0 +1,37 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// 工作流定义（definition 为 WorkflowDefinition 的 JSON 序列化）
+model Workflow {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  definition  String
+  /// 每次成功更新 definition 自增，供执行时锁定版本
+  version     Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("workflows")
+}
+
+/// 执行事件表：只追加（append-only），禁止 UPDATE/DELETE。
+/// 第 6-8 周的 Event Store 直接消费；seq 为运行内单调序号。
+model WorkflowEvent {
+  id        Int      @id @default(autoincrement())
+  runId     String
+  seq       Int
+  type      String
+  payload   String
+  createdAt DateTime @default(now())
+
+  @@unique([runId, seq])
+  @@index([runId])
+  @@map("workflow_events")
+}

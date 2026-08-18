@@ -7,11 +7,7 @@
       "outputs": ["dist/**", "build/**"]
     },
     "test": {
-      "dependsOn": ["build"],
-      "outputs": ["coverage/**"]
-    },
-    "lint": {
-      "outputs": []
+      "dependsOn": ["build"]
     },
     "dev": {
       "cache": false,
