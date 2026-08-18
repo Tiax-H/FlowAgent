@@ -29,7 +29,9 @@ export function NodePalette({ onAdd }: { onAdd: (type: NodeType, position: { x: 
           </button>
         );
       })}
-      <p className="mt-auto text-[10px] leading-tight text-neutral-400">拖拽或点击添加节点</p>
+      <p className="mt-auto text-[10px] leading-tight text-neutral-400">
+        拖拽或点击添加节点；点选节点/连线后按 Delete 删除
+      </p>
     </aside>
   );
 }

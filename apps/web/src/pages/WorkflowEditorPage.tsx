@@ -198,7 +198,7 @@ function EditorCanvas({ workflowId, onBack }: EditorProps) {
             onDragOver={onDragOver}
             onDrop={onDrop}
             fitView
-            deleteKeyCode={null}
+            deleteKeyCode={['Backspace', 'Delete']}
           >
             <Background variant={BackgroundVariant.Dots} gap={20} />
             <Controls />
