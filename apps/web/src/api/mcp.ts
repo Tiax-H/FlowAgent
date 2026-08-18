@@ -1,0 +1,58 @@
+export interface McpServer {
+  id: string;
+  name: string;
+  transport: string;
+  command: string | null;
+  args: string | null;
+  url: string | null;
+  enabled: boolean;
+  status: string;
+  statusMessage: string | null;
+  lastConnectedAt: string | null;
+  toolCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface McpTool {
+  qualifiedName: string;
+  serverId: string;
+  serverName: string;
+  name: string;
+  title: string | null;
+  description: string | null;
+  inputSchema: unknown;
+}
+
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, {
+    headers: { 'Content-Type': 'application/json' },
+    ...init,
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(body?.message ?? `HTTP ${response.status}`);
+  }
+  if (response.status === 204) return undefined as T;
+  return (await response.json()) as T;
+}
+
+export const mcpApi = {
+  listServers: () => request<McpServer[]>('/api/mcp/servers'),
+  createServer: (body: {
+    name: string;
+    transport: 'stdio' | 'http';
+    command?: string;
+    args?: string;
+    url?: string;
+  }) => request<McpServer>('/api/mcp/servers', { method: 'POST', body: JSON.stringify(body) }),
+  removeServer: (id: string) => request<void>(`/api/mcp/servers/${id}`, { method: 'DELETE' }),
+  reconnectServer: (id: string) =>
+    request<McpServer>(`/api/mcp/servers/${id}/reconnect`, { method: 'PATCH' }),
+  listTools: () => request<McpTool[]>('/api/mcp/tools'),
+  invokeTool: (server: string, tool: string, args: Record<string, unknown>) =>
+    request<{ ok: boolean; result: unknown }>('/api/mcp/tools/invoke', {
+      method: 'POST',
+      body: JSON.stringify({ server, tool, args }),
+    }),
+};

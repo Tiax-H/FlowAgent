@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@flowagent/shared": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@nestjs/common": "^11.0.0",
     "@nestjs/core": "^11.0.0",
     "@nestjs/platform-express": "^11.0.0",

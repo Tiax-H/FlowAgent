@@ -35,3 +35,41 @@ model WorkflowEvent {
   @@index([runId])
   @@map("workflow_events")
 }
+
+/// MCP Server 连接配置；transport 为 stdio（command+args）或 http（url）
+model McpServer {
+  id              String    @id @default(cuid())
+  /// 全局唯一连接名，也是工具命名空间前缀
+  name            String    @unique
+  transport       String
+  command         String?
+  args            String?
+  url             String?
+  enabled         Boolean   @default(true)
+  /// 运行时状态：disconnected / connecting / connected / error
+  status          String    @default("disconnected")
+  statusMessage   String?
+  lastConnectedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  tools           McpTool[]
+
+  @@map("mcp_servers")
+}
+
+/// 工具注册表（discovery 投影落库）；server 重连时全量替换
+model McpTool {
+  id           String    @id @default(cuid())
+  serverId     String
+  name         String
+  title        String?
+  description  String?
+  inputSchema  String
+  discoveredAt DateTime  @default(now())
+
+  server McpServer @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  @@unique([serverId, name])
+  @@map("mcp_tools")
+}
