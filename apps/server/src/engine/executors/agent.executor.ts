@@ -30,7 +30,10 @@ export function createAgentExecutor(services: NodeRuntimeServices): NodeExecutor
         function: {
           name: functionName,
           description: schema.description ?? `${schema.server}:${schema.tool}`,
-          parameters: (schema.inputSchema as Record<string, unknown>) ?? { type: 'object', properties: {} },
+          parameters: (schema.inputSchema as Record<string, unknown>) ?? {
+            type: 'object',
+            properties: {},
+          },
         },
       };
     });
@@ -101,7 +104,11 @@ export function createAgentExecutor(services: NodeRuntimeServices): NodeExecutor
           }
 
           if (!binding) {
-            return { call, ok: false as const, result: { error: `未知工具: ${call.function.name}` } };
+            return {
+              call,
+              ok: false as const,
+              result: { error: `未知工具: ${call.function.name}` },
+            };
           }
 
           await emit('TOOL_CALLED', {
@@ -112,10 +119,12 @@ export function createAgentExecutor(services: NodeRuntimeServices): NodeExecutor
             args,
           });
 
-          const outcome = await services.callTool(binding.server, binding.tool, args).catch((error: unknown) => ({
-            ok: false as const,
-            result: { error: error instanceof Error ? error.message : String(error) },
-          }));
+          const outcome = await services
+            .callTool(binding.server, binding.tool, args)
+            .catch((error: unknown) => ({
+              ok: false as const,
+              result: { error: error instanceof Error ? error.message : String(error) },
+            }));
 
           await emit('TOOL_RESULT', {
             nodeId: node.id,

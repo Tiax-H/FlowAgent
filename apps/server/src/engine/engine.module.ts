@@ -1,13 +1,12 @@
 import { Module, type OnModuleInit } from '@nestjs/common';
 
-import { LlmAdapter } from '../llm/llm.adapter';
-import { McpRegistryService } from '../mcp/mcp.registry';
-import { PrismaService } from '../prisma/prisma.service';
+import { McpModule } from '../mcp/mcp.module';
+import { RunsModule } from '../runs/runs.module';
 import { RunsService } from '../runs/runs.service';
-import { EventStore } from './event-store.service';
 import { EngineService } from './scheduler';
 
 @Module({
+  imports: [RunsModule, McpModule],
   providers: [EngineService],
   exports: [EngineService],
 })
@@ -23,6 +22,3 @@ export class EngineModule implements OnModuleInit {
     );
   }
 }
-
-/** 依赖注入编译期校验（防止参数顺序漂移） */
-export type EngineDependencies = [PrismaService, EventStore, LlmAdapter, McpRegistryService, RunsService];

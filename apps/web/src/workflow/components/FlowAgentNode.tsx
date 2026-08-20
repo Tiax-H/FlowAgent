@@ -23,9 +23,13 @@ export function FlowAgentNode({ data, selected }: NodeProps<Node<FlowAgentNodeDa
         <Handle type="target" position={Position.Left} className="!h-2.5 !w-2.5 !bg-neutral-400" />
       )}
       <div className="flex items-center gap-2">
-        <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${meta.color}`}>{meta.label}</span>
+        <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${meta.color}`}>
+          {meta.label}
+        </span>
       </div>
-      <p className="mt-1 truncate text-sm font-medium text-neutral-800">{data.name || meta.label}</p>
+      <p className="mt-1 truncate text-sm font-medium text-neutral-800">
+        {data.name || meta.label}
+      </p>
       {branches.length > 0 && (
         <ul className="mt-1 space-y-0.5">
           {branches.map((branch) => (
@@ -51,7 +55,11 @@ export function FlowAgentNode({ data, selected }: NodeProps<Node<FlowAgentNodeDa
             ))}
           </div>
         ) : (
-          <Handle type="source" position={Position.Right} className="!h-2.5 !w-2.5 !bg-neutral-400" />
+          <Handle
+            type="source"
+            position={Position.Right}
+            className="!h-2.5 !w-2.5 !bg-neutral-400"
+          />
         ))}
     </div>
   );

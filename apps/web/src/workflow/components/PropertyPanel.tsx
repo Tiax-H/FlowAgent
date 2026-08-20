@@ -38,7 +38,8 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-const inputClass = 'w-full rounded border border-neutral-300 px-2 py-1.5 text-sm focus:border-neutral-500 focus:outline-none';
+const inputClass =
+  'w-full rounded border border-neutral-300 px-2 py-1.5 text-sm focus:border-neutral-500 focus:outline-none';
 
 function TextInput(props: {
   value: string;
@@ -56,19 +57,31 @@ function TextInput(props: {
   );
 }
 
-function NumberInput(props: { value: number | undefined; onChange: (value: number | undefined) => void; placeholder?: string }) {
+function NumberInput(props: {
+  value: number | undefined;
+  onChange: (value: number | undefined) => void;
+  placeholder?: string;
+}) {
   return (
     <input
       type="number"
       value={props.value ?? ''}
-      onChange={(event) => props.onChange(event.target.value === '' ? undefined : Number(event.target.value))}
+      onChange={(event) =>
+        props.onChange(event.target.value === '' ? undefined : Number(event.target.value))
+      }
       placeholder={props.placeholder}
       className={inputClass}
     />
   );
 }
 
-function TextArea(props: { value: string; onChange: (value: string) => void; rows?: number; placeholder?: string; mono?: boolean }) {
+function TextArea(props: {
+  value: string;
+  onChange: (value: string) => void;
+  rows?: number;
+  placeholder?: string;
+  mono?: boolean;
+}) {
   return (
     <textarea
       value={props.value}
@@ -136,18 +149,37 @@ function TemplateMapEditor({
   );
 }
 
-function AgentForm({ data, onChange, tools }: { data: AgentNodeData; onChange: (patch: Partial<AgentNodeData>) => void; tools: McpTool[] }) {
+function AgentForm({
+  data,
+  onChange,
+  tools,
+}: {
+  data: AgentNodeData;
+  onChange: (patch: Partial<AgentNodeData>) => void;
+  tools: McpTool[];
+}) {
   const bound: McpToolBinding[] = data.tools ?? [];
   return (
     <div className="space-y-3">
       <Field label="Provider">
-        <TextInput value={data.provider ?? ''} onChange={(provider) => onChange({ provider })} placeholder="openai / aggregator" />
+        <TextInput
+          value={data.provider ?? ''}
+          onChange={(provider) => onChange({ provider })}
+          placeholder="openai / aggregator"
+        />
       </Field>
       <Field label="模型">
-        <TextInput value={data.model ?? ''} onChange={(model) => onChange({ model })} placeholder="deepseek-chat" />
+        <TextInput
+          value={data.model ?? ''}
+          onChange={(model) => onChange({ model })}
+          placeholder="deepseek-chat"
+        />
       </Field>
       <Field label="System Prompt">
-        <TextArea value={data.systemPrompt ?? ''} onChange={(systemPrompt) => onChange({ systemPrompt })} />
+        <TextArea
+          value={data.systemPrompt ?? ''}
+          onChange={(systemPrompt) => onChange({ systemPrompt })}
+        />
       </Field>
       <Field label="提示词（支持 {{node.output}} 模板）">
         <TextArea value={data.prompt ?? ''} onChange={(prompt) => onChange({ prompt })} />
@@ -182,17 +214,31 @@ function AgentForm({ data, onChange, tools }: { data: AgentNodeData; onChange: (
       </Field>
       <div className="grid grid-cols-2 gap-2">
         <Field label="最大轮数">
-          <NumberInput value={data.maxIterations} onChange={(maxIterations) => onChange({ maxIterations })} placeholder="8" />
+          <NumberInput
+            value={data.maxIterations}
+            onChange={(maxIterations) => onChange({ maxIterations })}
+            placeholder="8"
+          />
         </Field>
         <Field label="Temperature">
-          <NumberInput value={data.temperature} onChange={(temperature) => onChange({ temperature })} placeholder="0.7" />
+          <NumberInput
+            value={data.temperature}
+            onChange={(temperature) => onChange({ temperature })}
+            placeholder="0.7"
+          />
         </Field>
       </div>
     </div>
   );
 }
 
-function ConditionForm({ data, onChange }: { data: ConditionNodeData; onChange: (patch: Partial<ConditionNodeData>) => void }) {
+function ConditionForm({
+  data,
+  onChange,
+}: {
+  data: ConditionNodeData;
+  onChange: (patch: Partial<ConditionNodeData>) => void;
+}) {
   const branches: ConditionBranch[] = data.branches ?? [];
   return (
     <div className="space-y-2">
@@ -241,7 +287,11 @@ function ConditionForm({ data, onChange }: { data: ConditionNodeData; onChange: 
       ))}
       <button
         type="button"
-        onClick={() => onChange({ branches: [...branches, { id: `branch_${branches.length + 1}`, expression: 'true' }] })}
+        onClick={() =>
+          onChange({
+            branches: [...branches, { id: `branch_${branches.length + 1}`, expression: 'true' }],
+          })
+        }
         className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-50"
       >
         + 添加分支
@@ -267,7 +317,9 @@ export function PropertyPanel({ node, onChange, onDelete }: PropertyPanelProps) 
   return (
     <aside className="flex w-72 shrink-0 flex-col overflow-auto border-l border-neutral-200 bg-white p-3">
       <header className="mb-3 flex items-center gap-2">
-        <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${meta.color}`}>{meta.label}</span>
+        <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${meta.color}`}>
+          {meta.label}
+        </span>
         <code className="text-[10px] text-neutral-400">{node.id}</code>
         <button
           type="button"
@@ -311,19 +363,32 @@ export function PropertyPanel({ node, onChange, onDelete }: PropertyPanelProps) 
         )}
 
         {data.nodeType === 'agent' && (
-          <AgentForm data={data as unknown as AgentNodeData} onChange={(patch) => onChange(patch as Record<string, unknown>)} tools={tools} />
+          <AgentForm
+            data={data as unknown as AgentNodeData}
+            onChange={(patch) => onChange(patch as Record<string, unknown>)}
+            tools={tools}
+          />
         )}
 
         {data.nodeType === 'llm' && (
           <div className="space-y-3">
             <Field label="Provider">
-              <TextInput value={(data as unknown as LlmNodeData).provider ?? ''} onChange={(provider) => onChange({ provider })} />
+              <TextInput
+                value={(data as unknown as LlmNodeData).provider ?? ''}
+                onChange={(provider) => onChange({ provider })}
+              />
             </Field>
             <Field label="模型">
-              <TextInput value={(data as unknown as LlmNodeData).model ?? ''} onChange={(model) => onChange({ model })} />
+              <TextInput
+                value={(data as unknown as LlmNodeData).model ?? ''}
+                onChange={(model) => onChange({ model })}
+              />
             </Field>
             <Field label="提示词">
-              <TextArea value={(data as unknown as LlmNodeData).prompt ?? ''} onChange={(prompt) => onChange({ prompt })} />
+              <TextArea
+                value={(data as unknown as LlmNodeData).prompt ?? ''}
+                onChange={(prompt) => onChange({ prompt })}
+              />
             </Field>
             <Field label="Temperature">
               <NumberInput
@@ -342,7 +407,7 @@ export function PropertyPanel({ node, onChange, onDelete }: PropertyPanelProps) 
                 <p className="text-xs text-neutral-400">注册表为空，请先在 MCP Servers 页添加</p>
               ) : (
                 <select
-                  value={`${((data as unknown as ToolNodeData).server ?? '')}:${((data as unknown as ToolNodeData).tool ?? '')}`}
+                  value={`${(data as unknown as ToolNodeData).server ?? ''}:${(data as unknown as ToolNodeData).tool ?? ''}`}
                   onChange={(event) => {
                     const [server, tool] = event.target.value.split(':');
                     onChange({ server, tool });
@@ -383,7 +448,10 @@ export function PropertyPanel({ node, onChange, onDelete }: PropertyPanelProps) 
         )}
 
         {data.nodeType === 'condition' && (
-          <ConditionForm data={data as unknown as ConditionNodeData} onChange={(patch) => onChange(patch as Record<string, unknown>)} />
+          <ConditionForm
+            data={data as unknown as ConditionNodeData}
+            onChange={(patch) => onChange(patch as Record<string, unknown>)}
+          />
         )}
 
         {data.nodeType === 'loop' && (
@@ -417,7 +485,10 @@ export function PropertyPanel({ node, onChange, onDelete }: PropertyPanelProps) 
         {data.nodeType === 'human' && (
           <div className="space-y-3">
             <Field label="审批说明">
-              <TextArea value={(data as unknown as HumanNodeData).prompt ?? ''} onChange={(prompt) => onChange({ prompt })} />
+              <TextArea
+                value={(data as unknown as HumanNodeData).prompt ?? ''}
+                onChange={(prompt) => onChange({ prompt })}
+              />
             </Field>
             <Field label="超时（秒，空=无限等待）">
               <NumberInput
@@ -432,7 +503,9 @@ export function PropertyPanel({ node, onChange, onDelete }: PropertyPanelProps) 
         {data.nodeType === 'transform' && (
           <Field label="模板映射">
             <TemplateMapEditor
-              value={((data as unknown as TransformNodeData).template ?? {}) as Record<string, string>}
+              value={
+                ((data as unknown as TransformNodeData).template ?? {}) as Record<string, string>
+              }
               onChange={(template) => onChange({ template })}
               keyPlaceholder="字段名"
             />

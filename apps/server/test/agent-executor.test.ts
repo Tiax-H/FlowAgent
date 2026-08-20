@@ -59,7 +59,12 @@ describe('Agent ReAct 执行器', () => {
 
     const executor = createAgentExecutor(runtime);
     const result = await executor({
-      node: agentNode({ provider: 'test', model: 'fake', prompt: '查一下 mcp', tools: [{ server: 'search', tool: 'web_search' }] }),
+      node: agentNode({
+        provider: 'test',
+        model: 'fake',
+        prompt: '查一下 mcp',
+        tools: [{ server: 'search', tool: 'web_search' }],
+      }),
       context: { input: {}, variables: {}, nodeOutputs: {} },
       nextSeq: () => 0,
       emit,
@@ -115,14 +120,23 @@ describe('Agent ReAct 执行器', () => {
           return {
             content: null,
             toolCalls: [
-              { id: `call_${callCount}`, type: 'function' as const, function: { name: 'search__web_search', arguments: '{}' } },
+              {
+                id: `call_${callCount}`,
+                type: 'function' as const,
+                function: { name: 'search__web_search', arguments: '{}' },
+              },
             ],
           };
         },
       },
       callTool: async () => ({ ok: true, result: [] }),
       listToolSchemas: async () => [
-        { server: 'search', tool: 'web_search', description: '搜索', inputSchema: { type: 'object' } },
+        {
+          server: 'search',
+          tool: 'web_search',
+          description: '搜索',
+          inputSchema: { type: 'object' },
+        },
       ],
     };
 

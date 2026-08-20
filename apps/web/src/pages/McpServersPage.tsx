@@ -61,7 +61,12 @@ export function McpServersPage() {
     try {
       await mcpApi.createServer(
         transport === 'stdio'
-          ? { name: name.trim(), transport, command: command.trim(), args: args.trim() || undefined }
+          ? {
+              name: name.trim(),
+              transport,
+              command: command.trim(),
+              args: args.trim() || undefined,
+            }
           : { name: name.trim(), transport, url: url.trim() },
       );
       setName('');

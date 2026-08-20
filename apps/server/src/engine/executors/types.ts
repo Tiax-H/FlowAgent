@@ -52,14 +52,22 @@ export interface NodeRuntimeServices {
         temperature?: number;
         timeoutMs?: number;
       },
-  ) => Promise<{
-    content: string | null;
-    toolCalls?: Array<{ id: string; type?: 'function'; function: { name: string; arguments: string } }>;
-    usage?: { promptTokens?: number; completionTokens?: number };
-  }>;
+    ) => Promise<{
+      content: string | null;
+      toolCalls?: Array<{
+        id: string;
+        type?: 'function';
+        function: { name: string; arguments: string };
+      }>;
+      usage?: { promptTokens?: number; completionTokens?: number };
+    }>;
   };
   /** MCP 工具调用（tool/agent 节点），必须走注册表路由 */
-  callTool: (server: string, tool: string, args: Record<string, unknown>) => Promise<{ ok: boolean; result: unknown }>;
+  callTool: (
+    server: string,
+    tool: string,
+    args: Record<string, unknown>,
+  ) => Promise<{ ok: boolean; result: unknown }>;
   /** MCP 工具 schema 查询（agent 节点绑定工具转换） */
   listToolSchemas: (bindings: Array<{ server: string; tool: string }>) => Promise<
     Array<{

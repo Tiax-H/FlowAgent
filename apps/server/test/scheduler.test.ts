@@ -14,13 +14,27 @@ import { projectRunState } from '../src/engine/projection';
 class MemoryEventStore {
   events: WorkflowEvent[] = [];
 
-  async append(runId: string, seq: number, type: WorkflowEvent['type'], payload: unknown): Promise<WorkflowEvent> {
-    const event: WorkflowEvent = { id: this.events.length + 1, runId, seq, type, payload, timestamp: new Date().toISOString() };
+  async append(
+    runId: string,
+    seq: number,
+    type: WorkflowEvent['type'],
+    payload: unknown,
+  ): Promise<WorkflowEvent> {
+    const event: WorkflowEvent = {
+      id: this.events.length + 1,
+      runId,
+      seq,
+      type,
+      payload,
+      timestamp: new Date().toISOString(),
+    };
     this.events.push(event);
     return event;
   }
   async readEvents(runId: string, fromSeq = 0): Promise<WorkflowEvent[]> {
-    return this.events.filter((event) => event.runId === runId && event.seq > fromSeq).sort((a, b) => a.seq - b.seq);
+    return this.events
+      .filter((event) => event.runId === runId && event.seq > fromSeq)
+      .sort((a, b) => a.seq - b.seq);
   }
   async nextSeq(runId: string): Promise<number> {
     const forRun = this.events.filter((event) => event.runId === runId);
@@ -40,7 +54,12 @@ function linearDefinition(nodes: unknown[], edges: unknown[]): Record<string, un
   return { schemaVersion: 1, nodes, edges };
 }
 
-function node(id: string, type: string, data: Record<string, unknown> = {}, position = { x: 0, y: 0 }) {
+function node(
+  id: string,
+  type: string,
+  data: Record<string, unknown> = {},
+  position = { x: 0, y: 0 },
+) {
   return { id, type, name: id, position, data };
 }
 
@@ -77,7 +96,12 @@ describe('EngineService 调度器', () => {
 
   it('并行分支：两个中间节点都被执行', async () => {
     const definition = linearDefinition(
-      [node('start', 'start'), node('a', 'transform', { template: { r: 'A' } }), node('b', 'transform', { template: { r: 'B' } }), node('end', 'end')],
+      [
+        node('start', 'start'),
+        node('a', 'transform', { template: { r: 'A' } }),
+        node('b', 'transform', { template: { r: 'B' } }),
+        node('end', 'end'),
+      ],
       [
         { id: 'e1', source: 'start', target: 'a' },
         { id: 'e2', source: 'start', target: 'b' },
@@ -100,7 +124,12 @@ describe('EngineService 调度器', () => {
     const definition = linearDefinition(
       [
         node('start', 'start'),
-        node('cond', 'condition', { branches: [{ id: 'hi', expression: 'input.score > 0.5' }, { id: 'lo', expression: 'true' }] }),
+        node('cond', 'condition', {
+          branches: [
+            { id: 'hi', expression: 'input.score > 0.5' },
+            { id: 'lo', expression: 'true' },
+          ],
+        }),
         node('hi_path', 'transform', { template: { path: 'hi' } }),
         node('lo_path', 'transform', { template: { path: 'lo' } }),
         node('end', 'end'),
@@ -127,7 +156,12 @@ describe('EngineService 调度器', () => {
 
   it('节点失败 → RUN_FAILED，其余节点不再调度', async () => {
     const definition = linearDefinition(
-      [node('start', 'start'), node('boom', 'transform', {}), node('after', 'transform', { template: { x: 1 } }), node('end', 'end')],
+      [
+        node('start', 'start'),
+        node('boom', 'transform', {}),
+        node('after', 'transform', { template: { x: 1 } }),
+        node('end', 'end'),
+      ],
       [
         { id: 'e1', source: 'start', target: 'boom' },
         { id: 'e2', source: 'boom', target: 'after' },
@@ -213,7 +247,10 @@ describe('EngineService 调度器', () => {
 
     const state = projectRunState('run_1', await eventStore.readEvents('run_1'));
     expect(state.status).toBe('completed');
-    const loopOutput = state.nodes.get('loop_1')?.output as { iterations: number; results: unknown[] };
+    const loopOutput = state.nodes.get('loop_1')?.output as {
+      iterations: number;
+      results: unknown[];
+    };
     expect(loopOutput.iterations).toBe(3);
     expect(loopOutput.results).toEqual([{ v: 'a' }, { v: 'b' }, { v: 'c' }]);
   });
@@ -224,7 +261,9 @@ describe('EngineService 调度器', () => {
 function makeEngine(eventStore: MemoryEventStore, definition: unknown): EngineService {
   const workflows = new Map([['wf_1', { id: 'wf_1', definition: JSON.stringify(definition) }]]);
   const prismaStub = {
-    workflow: { findUnique: async ({ where }: { where: { id: string } }) => workflows.get(where.id) ?? null },
+    workflow: {
+      findUnique: async ({ where }: { where: { id: string } }) => workflows.get(where.id) ?? null,
+    },
     mcpTool: { findMany: async () => [] },
   } as unknown as PrismaService;
   const runsStub = { syncFromProjection: async () => undefined } as unknown as RunsService;

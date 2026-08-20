@@ -18,9 +18,9 @@ describe('evaluateCondition', () => {
   });
 
   it('逻辑组合', () => {
-    expect(
-      evaluateCondition('agent_1.output.score > 0.7 && input.query == "mcp"', context()),
-    ).toBe(true);
+    expect(evaluateCondition('agent_1.output.score > 0.7 && input.query == "mcp"', context())).toBe(
+      true,
+    );
     expect(evaluateCondition('false || agent_1.output.score > 0.9', context())).toBe(false);
   });
 

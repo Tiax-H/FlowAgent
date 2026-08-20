@@ -1,12 +1,12 @@
 import { Module } from '@nestjs/common';
 
-import { EventStore } from '../engine/event-store.service';
 import { RunsController } from './runs.controller';
+import { RunStreamController } from './run-stream.controller';
 import { RunsService } from './runs.service';
 
 @Module({
-  controllers: [RunsController],
-  providers: [RunsService, EventStore],
+  controllers: [RunsController, RunStreamController],
+  providers: [RunsService],
   exports: [RunsService],
 })
 export class RunsModule {}

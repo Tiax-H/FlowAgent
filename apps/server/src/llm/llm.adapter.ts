@@ -59,7 +59,9 @@ export interface LlmProviderConfig {
 const PROVIDER_ENV_PREFIX = 'FLOWAGENT_PROVIDERS_';
 
 /** 从环境变量解析 Provider 配置表：FLOWAGENT_PROVIDERS_<NAME>__BASEURL/__APIKEY/__MODELS */
-export function parseProviderConfigs(env: NodeJS.ProcessEnv = process.env): Map<string, LlmProviderConfig> {
+export function parseProviderConfigs(
+  env: NodeJS.ProcessEnv = process.env,
+): Map<string, LlmProviderConfig> {
   const providers = new Map<string, LlmProviderConfig>();
 
   for (const [key, rawValue] of Object.entries(env)) {
@@ -78,7 +80,11 @@ export function parseProviderConfigs(env: NodeJS.ProcessEnv = process.env): Map<
     }
     if (field === 'baseurl') provider.baseURL = normalizeBaseUrl(rawValue);
     else if (field === 'apikey') provider.apiKey = rawValue;
-    else if (field === 'models') provider.models = rawValue.split(',').map((model) => model.trim()).filter(Boolean);
+    else if (field === 'models')
+      provider.models = rawValue
+        .split(',')
+        .map((model) => model.trim())
+        .filter(Boolean);
   }
 
   for (const [name, provider] of [...providers]) {
@@ -118,7 +124,10 @@ export class LlmAdapter {
   ): Promise<LlmCompletionResult> {
     const provider = this.providers.get(providerName);
     if (!provider) {
-      throw new LlmProviderError(`Provider 未配置或缺少 baseURL/apiKey: "${providerName}"`, providerName);
+      throw new LlmProviderError(
+        `Provider 未配置或缺少 baseURL/apiKey: "${providerName}"`,
+        providerName,
+      );
     }
 
     const controller = new AbortController();
@@ -150,7 +159,9 @@ export class LlmAdapter {
       }
 
       const data = (await response.json()) as {
-        choices?: Array<{ message?: { content?: string | null; tool_calls?: LlmChatMessage['tool_calls'] } }>;
+        choices?: Array<{
+          message?: { content?: string | null; tool_calls?: LlmChatMessage['tool_calls'] };
+        }>;
         usage?: { prompt_tokens?: number; completion_tokens?: number };
       };
       const choice = data.choices?.[0]?.message;

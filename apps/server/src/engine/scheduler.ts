@@ -65,7 +65,10 @@ function createExecutorFactory(services: NodeRuntimeServices) {
 }
 
 /** Condition 执行器：求值选分支，输出 selected 供调度器剪枝 */
-const conditionExecutor = async ({ node, context }: {
+const conditionExecutor = async ({
+  node,
+  context,
+}: {
   node: WorkflowNode;
   context: TemplateContext;
   nextSeq: () => number;
@@ -183,7 +186,9 @@ export class EngineService {
 
     const validation = validateWorkflowDefinition(definition);
     if (!validation.valid) {
-      await this.terminate(runId, 'RUN_FAILED', { error: `定义校验失败: ${validation.errors.join('; ')}` });
+      await this.terminate(runId, 'RUN_FAILED', {
+        error: `定义校验失败: ${validation.errors.join('; ')}`,
+      });
       return;
     }
 
@@ -244,7 +249,9 @@ export class EngineService {
     let aborted = false;
     let suspended = false;
 
-    const ready: string[] = nodes.filter((node) => (indegree.get(node.id) ?? 0) === 0).map((node) => node.id);
+    const ready: string[] = nodes
+      .filter((node) => (indegree.get(node.id) ?? 0) === 0)
+      .map((node) => node.id);
     let cursor = 0;
     const inflight = new Set<Promise<void>>();
 
@@ -264,7 +271,12 @@ export class EngineService {
       const context: TemplateContext = { input, variables, nodeOutputs };
 
       try {
-        const result = await executorFactory(node.type)({ node, context, nextSeq: () => seq, emit });
+        const result = await executorFactory(node.type)({
+          node,
+          context,
+          nextSeq: () => seq,
+          emit,
+        });
 
         if (result.suspended) {
           suspended = true;
@@ -286,7 +298,10 @@ export class EngineService {
               indegree.set(edge.target, remaining);
               if (remaining === 0) ready.push(edge.target);
             } else {
-              await emit('NODE_SKIPPED', { nodeId: edge.target, nodeType: nodeById.get(edge.target)?.type ?? '' });
+              await emit('NODE_SKIPPED', {
+                nodeId: edge.target,
+                nodeType: nodeById.get(edge.target)?.type ?? '',
+              });
               skipDownstream(edge.target);
             }
           }
@@ -338,7 +353,8 @@ export class EngineService {
 
     const endNode = nodes.find((node) => node.type === 'end');
     const endOutput = endNode ? nodeOutputs[endNode.id] : undefined;
-    const output = endOutput && typeof endOutput === 'object' && 'output' in endOutput ? endOutput.output : null;
+    const output =
+      endOutput && typeof endOutput === 'object' && 'output' in endOutput ? endOutput.output : null;
     await this.terminate(runId, 'RUN_COMPLETED', { output });
   }
 

@@ -1,11 +1,19 @@
 import { useCallback, useEffect, useState } from 'react';
 
+import { runsApi } from './api/runs';
 import { workflowsApi } from './api/workflows';
 import { McpServersPage } from './pages/McpServersPage';
+import { RunDetailPage } from './pages/RunDetailPage';
+import { RunsPage } from './pages/RunsPage';
 import { WorkflowEditorPage } from './pages/WorkflowEditorPage';
 import type { WorkflowRecord } from './workflow/types';
 
-type Page = { kind: 'workflows' } | { kind: 'mcp' } | { kind: 'editor'; workflowId: string | null };
+type Page =
+  | { kind: 'workflows' }
+  | { kind: 'mcp' }
+  | { kind: 'runs' }
+  | { kind: 'editor'; workflowId: string | null }
+  | { kind: 'runDetail'; runId: string };
 
 export function App() {
   const [page, setPage] = useState<Page>({ kind: 'workflows' });
@@ -44,6 +52,19 @@ export function App() {
     }
   }
 
+  async function handleRun(workflowId: string | null) {
+    if (!workflowId) {
+      setError('请先保存工作流再运行');
+      return;
+    }
+    try {
+      const { runId } = await runsApi.start(workflowId, null);
+      setPage({ kind: 'runDetail', runId });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
   return (
     <div className="flex h-screen flex-col bg-neutral-50 text-neutral-900">
       <header className="flex items-center justify-between border-b border-neutral-200 px-6 py-3">
@@ -63,6 +84,13 @@ export function App() {
           >
             MCP Servers
           </button>
+          <button
+            type="button"
+            onClick={() => setPage({ kind: 'runs' })}
+            className={`rounded px-3 py-1 ${page.kind === 'runs' || page.kind === 'runDetail' ? 'bg-neutral-900 text-white' : 'text-neutral-600 hover:bg-neutral-100'}`}
+          >
+            运行
+          </button>
         </nav>
         <span className="text-sm text-neutral-500">Durable Agent Runtime</span>
       </header>
@@ -72,7 +100,16 @@ export function App() {
           <WorkflowEditorPage
             workflowId={page.workflowId}
             onBack={() => setPage({ kind: 'workflows' })}
+            onRun={(workflowId) => void handleRun(workflowId)}
           />
+        </main>
+      ) : page.kind === 'runDetail' ? (
+        <main className="min-h-0 flex-1">
+          <RunDetailPage runId={page.runId} onBack={() => setPage({ kind: 'runs' })} />
+        </main>
+      ) : page.kind === 'runs' ? (
+        <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <RunsPage onOpenRun={(runId) => setPage({ kind: 'runDetail', runId })} />
         </main>
       ) : page.kind === 'mcp' ? (
         <main className="flex-1 overflow-auto">

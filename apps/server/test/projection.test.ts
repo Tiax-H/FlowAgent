@@ -3,8 +3,18 @@ import type { WorkflowEvent } from '@flowagent/shared';
 
 import { applyEvent, emptyRunState, projectRunState } from '../src/engine/projection';
 
-function event(seq: number, type: WorkflowEvent['type'], payload: Record<string, unknown> = {}): WorkflowEvent {
-  return { runId: 'run_1', seq, type, payload, timestamp: new Date(2026, 0, 1, 0, 0, seq).toISOString() };
+function event(
+  seq: number,
+  type: WorkflowEvent['type'],
+  payload: Record<string, unknown> = {},
+): WorkflowEvent {
+  return {
+    runId: 'run_1',
+    seq,
+    type,
+    payload,
+    timestamp: new Date(2026, 0, 1, 0, 0, seq).toISOString(),
+  };
 }
 
 describe('projectRunState', () => {

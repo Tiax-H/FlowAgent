@@ -8,13 +8,27 @@ import { definitionToFlow, flowToDefinition } from '../src/workflow/convert';
  * 验证各类环必须被拦截。
  */
 
-function makeDefinition(edgeList: Array<{ source: string; target: string; sourceHandle?: string }>): WorkflowDefinition {
+function makeDefinition(
+  edgeList: Array<{ source: string; target: string; sourceHandle?: string }>,
+): WorkflowDefinition {
   return {
     schemaVersion: 1,
     nodes: [
       { id: 'start', type: 'start', name: '开始', position: { x: 0, y: 0 }, data: {} },
-      { id: 'agent', type: 'agent', name: 'A', position: { x: 200, y: 0 }, data: { provider: 'p', model: 'm' } },
-      { id: 'llm', type: 'llm', name: 'B', position: { x: 400, y: 0 }, data: { provider: 'p', model: 'm', prompt: 'x' } },
+      {
+        id: 'agent',
+        type: 'agent',
+        name: 'A',
+        position: { x: 200, y: 0 },
+        data: { provider: 'p', model: 'm' },
+      },
+      {
+        id: 'llm',
+        type: 'llm',
+        name: 'B',
+        position: { x: 400, y: 0 },
+        data: { provider: 'p', model: 'm', prompt: 'x' },
+      },
       { id: 'end', type: 'end', name: '结束', position: { x: 600, y: 0 }, data: {} },
     ],
     edges: edgeList.map((edge, index) => ({
@@ -26,9 +40,16 @@ function makeDefinition(edgeList: Array<{ source: string; target: string; source
   };
 }
 
-function editorSavePipeline(definition: WorkflowDefinition): ReturnType<typeof validateWorkflowDefinition> {
+function editorSavePipeline(
+  definition: WorkflowDefinition,
+): ReturnType<typeof validateWorkflowDefinition> {
   const flow = definitionToFlow(definition);
-  const restored = flowToDefinition(flow.nodes, flow.edges, { schemaVersion: 1, name: 'x', nodes: [], edges: [] });
+  const restored = flowToDefinition(flow.nodes, flow.edges, {
+    schemaVersion: 1,
+    name: 'x',
+    nodes: [],
+    edges: [],
+  });
   return validateWorkflowDefinition(restored);
 }
 

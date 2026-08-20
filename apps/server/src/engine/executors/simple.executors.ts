@@ -4,7 +4,10 @@ import type { EndNodeData, StartNodeData, TransformNodeData } from '@flowagent/s
 import { renderDeep } from '../template';
 import type { NodeExecutionResult, NodeExecutor } from './types';
 
-export const startExecutor: NodeExecutor = async ({ node, context }): Promise<NodeExecutionResult> => {
+export const startExecutor: NodeExecutor = async ({
+  node,
+  context,
+}): Promise<NodeExecutionResult> => {
   const data = node.data as Partial<StartNodeData>;
   if (data.inputSchema) {
     // 输入校验：仅检查 object 类型与必填字段（深度校验由调用方保证）
@@ -14,18 +17,26 @@ export const startExecutor: NodeExecutor = async ({ node, context }): Promise<No
   return { output: context.input };
 };
 
-export const endExecutor: NodeExecutor = async ({ node, context }): Promise<NodeExecutionResult> => {
+export const endExecutor: NodeExecutor = async ({
+  node,
+  context,
+}): Promise<NodeExecutionResult> => {
   const data = node.data as Partial<EndNodeData>;
   if (!data.outputs || Object.keys(data.outputs).length === 0) {
     // 未配置输出映射：取最后一个上游节点输出（调度器以 { output } 包装注入）
-    const upstream = (context.nodeOutputs as Record<string, { output?: unknown }> | null)?.['__last_upstream__'];
+    const upstream = (context.nodeOutputs as Record<string, { output?: unknown }> | null)?.[
+      '__last_upstream__'
+    ];
     return { output: upstream?.output ?? null };
   }
   const rendered = renderDeep(data.outputs, context);
   return { output: rendered };
 };
 
-export const transformExecutor: NodeExecutor = async ({ node, context }): Promise<NodeExecutionResult> => {
+export const transformExecutor: NodeExecutor = async ({
+  node,
+  context,
+}): Promise<NodeExecutionResult> => {
   const data = node.data as Partial<TransformNodeData>;
   if (!data.template || Object.keys(data.template).length === 0) {
     throw new Error('Transform 节点缺少 template 配置');

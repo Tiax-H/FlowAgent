@@ -43,7 +43,12 @@ export class EventStore {
   constructor(private readonly prisma: PrismaService) {}
 
   /** 追加事件；seq 由调用方（引擎串行分配）保证运行内唯一 */
-  async append(runId: string, seq: number, type: WorkflowEventType, payload: unknown): Promise<WorkflowEvent> {
+  async append(
+    runId: string,
+    seq: number,
+    type: WorkflowEventType,
+    payload: unknown,
+  ): Promise<WorkflowEvent> {
     const row = await this.prisma.workflowEvent.create({
       data: { runId, seq, type, payload: JSON.stringify(payload ?? {}) },
     });

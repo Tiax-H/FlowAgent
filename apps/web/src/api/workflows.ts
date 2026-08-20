@@ -8,9 +8,10 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     ...init,
   });
   if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as
-      | { message?: string; errors?: string[] }
-      | null;
+    const body = (await response.json().catch(() => null)) as {
+      message?: string;
+      errors?: string[];
+    } | null;
     const detail = body?.errors?.length ? `：${body.errors.join('；')}` : '';
     throw new Error(`${body?.message ?? `HTTP ${response.status}`}${detail}`);
   }
@@ -30,6 +31,9 @@ export const workflowsApi = {
   create: (body: CreateWorkflowInput) =>
     request<WorkflowRecord>('/api/workflows', { method: 'POST', body: JSON.stringify(body) }),
   update: (id: string, body: Partial<CreateWorkflowInput>) =>
-    request<WorkflowRecord>(`/api/workflows/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    request<WorkflowRecord>(`/api/workflows/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
   remove: (id: string) => request<void>(`/api/workflows/${id}`, { method: 'DELETE' }),
 };

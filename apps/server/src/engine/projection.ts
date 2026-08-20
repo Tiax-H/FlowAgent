@@ -54,7 +54,8 @@ export function applyEvent(state: ProjectedRunState, event: WorkflowEvent): Proj
       if (node) next.nodes.set(nodeId!, { ...node, status: 'succeeded', output: payload.output });
       break;
     case 'NODE_FAILED':
-      if (node) next.nodes.set(nodeId!, { ...node, status: 'failed', error: String(payload.error ?? '') });
+      if (node)
+        next.nodes.set(nodeId!, { ...node, status: 'failed', error: String(payload.error ?? '') });
       break;
     case 'NODE_SKIPPED':
       if (node) next.nodes.set(nodeId!, { ...node, status: 'skipped' });

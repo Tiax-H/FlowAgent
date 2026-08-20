@@ -15,7 +15,13 @@ const definition: WorkflowDefinition = {
       position: { x: 300, y: 200 },
       data: { branches: [{ id: 'ok', expression: 'true' }] },
     },
-    { id: 'end', type: 'end', name: '结束', position: { x: 600, y: 200 }, data: { outputs: { final: '{{cond_1.output}}' } } },
+    {
+      id: 'end',
+      type: 'end',
+      name: '结束',
+      position: { x: 600, y: 200 },
+      data: { outputs: { final: '{{cond_1.output}}' } },
+    },
   ],
   edges: [
     { id: 'e1', source: 'start', target: 'cond_1' },
@@ -29,7 +35,12 @@ describe('definitionToFlow / flowToDefinition', () => {
     expect(flow.nodes).toHaveLength(3);
     expect(flow.edges[1]?.sourceHandle).toBe('ok');
 
-    const restored = flowToDefinition(flow.nodes, flow.edges, { schemaVersion: 1, name: 'roundtrip', nodes: [], edges: [] });
+    const restored = flowToDefinition(flow.nodes, flow.edges, {
+      schemaVersion: 1,
+      name: 'roundtrip',
+      nodes: [],
+      edges: [],
+    });
     expect(restored.nodes).toEqual(definition.nodes);
     expect(restored.edges).toEqual(definition.edges);
   });

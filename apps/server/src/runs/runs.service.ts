@@ -31,7 +31,8 @@ function parseJson<T>(raw: string | null, fallback: T): T {
 export class RunsService implements OnModuleInit {
   private readonly logger = new Logger(RunsService.name);
   /** 引擎注册的启动回调（避免循环依赖由 EngineModule 桥接 set） */
-  private runStarter: ((runId: string, workflowId: string, input: unknown) => Promise<void>) | null = null;
+  private runStarter:
+    ((runId: string, workflowId: string, input: unknown) => Promise<void>) | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -45,7 +46,9 @@ export class RunsService implements OnModuleInit {
     });
   }
 
-  setRunStarter(starter: (runId: string, workflowId: string, input: unknown) => Promise<void>): void {
+  setRunStarter(
+    starter: (runId: string, workflowId: string, input: unknown) => Promise<void>,
+  ): void {
     this.runStarter = starter;
   }
 
@@ -91,7 +94,9 @@ export class RunsService implements OnModuleInit {
         workflowNames.set(row.workflowId, workflow?.name ?? '(已删除)');
       }
     }
-    return Promise.all(rows.map((row) => this.toSummary(row, workflowNames.get(row.workflowId) ?? '(已删除)')));
+    return Promise.all(
+      rows.map((row) => this.toSummary(row, workflowNames.get(row.workflowId) ?? '(已删除)')),
+    );
   }
 
   async getRun(runId: string): Promise<RunSummary> {
@@ -183,10 +188,9 @@ export class RunsService implements OnModuleInit {
         where: { id: workflowId },
         select: { definition: true },
       });
-      const definition = parseJson<{ nodes?: Array<{ id: string; type: string; name: string }> } | null>(
-        workflow?.definition ?? null,
-        null,
-      );
+      const definition = parseJson<{
+        nodes?: Array<{ id: string; type: string; name: string }>;
+      } | null>(workflow?.definition ?? null, null);
       metas = definition?.nodes ?? [];
       this.nodeMetaCache.set(workflowId, metas);
     }

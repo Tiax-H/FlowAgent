@@ -9,7 +9,11 @@ export function nextNodeId(type: NodeType): string {
   return `${type}_${Date.now().toString(36)}_${idCounter}`;
 }
 
-export function createFlowNode(type: NodeType, position: XYPosition, data: Record<string, unknown> = {}): Node {
+export function createFlowNode(
+  type: NodeType,
+  position: XYPosition,
+  data: Record<string, unknown> = {},
+): Node {
   return {
     id: nextNodeId(type),
     type: 'flowagent',
@@ -48,14 +52,18 @@ export function definitionToFlow(definition: WorkflowDefinition): { nodes: Node[
 }
 
 /** React Flow 节点/边 → WorkflowDefinition（契约） */
-export function flowToDefinition(nodes: Node[], edges: Edge[], base: WorkflowDefinition): WorkflowDefinition {
+export function flowToDefinition(
+  nodes: Node[],
+  edges: Edge[],
+  base: WorkflowDefinition,
+): WorkflowDefinition {
   return {
     ...base,
     nodes: nodes.map((node) => {
-      const { nodeType, name, ...rest } = node.data as { nodeType: NodeType; name: string } & Record<
-        string,
-        unknown
-      >;
+      const { nodeType, name, ...rest } = node.data as {
+        nodeType: NodeType;
+        name: string;
+      } & Record<string, unknown>;
       return {
         id: node.id,
         type: nodeType,

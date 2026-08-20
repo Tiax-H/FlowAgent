@@ -31,9 +31,10 @@ const nodeTypes = { flowagent: FlowAgentNode };
 interface EditorProps {
   workflowId: string | null;
   onBack: () => void;
+  onRun: (workflowId: string | null) => void;
 }
 
-function EditorCanvas({ workflowId, onBack }: EditorProps) {
+function EditorCanvas({ workflowId, onBack, onRun }: EditorProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [record, setRecord] = useState<WorkflowRecord | null>(null);
@@ -65,23 +66,36 @@ function EditorCanvas({ workflowId, onBack }: EditorProps) {
           setEdges(flow.edges);
         }
       })
-      .catch((cause: unknown) => setErrors([cause instanceof Error ? cause.message : String(cause)]));
+      .catch((cause: unknown) =>
+        setErrors([cause instanceof Error ? cause.message : String(cause)]),
+      );
   }, [workflowId, setNodes, setEdges]);
 
   const onConnect = useCallback(
     (connection: Connection) => {
       setEdges((current) =>
-        addEdge({ ...connection, sourceHandle: connection.sourceHandle ?? null }, current.filter(
-          (edge) => !(edge.source === connection.source && edge.target === connection.target && edge.sourceHandle === (connection.sourceHandle ?? null)),
-        )),
+        addEdge(
+          { ...connection, sourceHandle: connection.sourceHandle ?? null },
+          current.filter(
+            (edge) =>
+              !(
+                edge.source === connection.source &&
+                edge.target === connection.target &&
+                edge.sourceHandle === (connection.sourceHandle ?? null)
+              ),
+          ),
+        ),
       );
     },
     [setEdges],
   );
 
-  const onNodeClick: NodeMouseHandler = useCallback((_, node) => {
-    setNodes((current) => current.map((item) => ({ ...item, selected: item.id === node.id })));
-  }, [setNodes]);
+  const onNodeClick: NodeMouseHandler = useCallback(
+    (_, node) => {
+      setNodes((current) => current.map((item) => ({ ...item, selected: item.id === node.id })));
+    },
+    [setNodes],
+  );
 
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
@@ -109,7 +123,9 @@ function EditorCanvas({ workflowId, onBack }: EditorProps) {
   const handleDelete = useCallback(
     (nodeId: string) => {
       setNodes((current) => current.filter((node) => node.id !== nodeId));
-      setEdges((current) => current.filter((edge) => edge.source !== nodeId && edge.target !== nodeId));
+      setEdges((current) =>
+        current.filter((edge) => edge.source !== nodeId && edge.target !== nodeId),
+      );
     },
     [setNodes, setEdges],
   );
@@ -154,7 +170,11 @@ function EditorCanvas({ workflowId, onBack }: EditorProps) {
   return (
     <div className="flex h-full flex-col">
       <header className="flex items-center gap-3 border-b border-neutral-200 bg-white px-4 py-2">
-        <button type="button" onClick={onBack} className="rounded px-2 py-1 text-sm text-neutral-600 hover:bg-neutral-100">
+        <button
+          type="button"
+          onClick={onBack}
+          className="rounded px-2 py-1 text-sm text-neutral-600 hover:bg-neutral-100"
+        >
           ← 返回
         </button>
         <input
@@ -170,6 +190,18 @@ function EditorCanvas({ workflowId, onBack }: EditorProps) {
           className="ml-auto rounded bg-neutral-900 px-3 py-1.5 text-sm text-white disabled:opacity-40"
         >
           保存
+        </button>
+        <button
+          type="button"
+          disabled={busy || !record}
+          title={record ? '先保存再运行' : '先保存工作流'}
+          onClick={async () => {
+            await handleSave();
+            onRun(record?.id ?? workflowId);
+          }}
+          className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white disabled:opacity-40"
+        >
+          ▶ 运行
         </button>
         {saved && <span className="text-xs text-green-600">{saved}</span>}
       </header>
@@ -194,7 +226,9 @@ function EditorCanvas({ workflowId, onBack }: EditorProps) {
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
             onNodeClick={onNodeClick}
-            onPaneClick={() => setNodes((current) => current.map((node) => ({ ...node, selected: false })))}
+            onPaneClick={() =>
+              setNodes((current) => current.map((node) => ({ ...node, selected: false })))
+            }
             onDragOver={onDragOver}
             onDrop={onDrop}
             fitView

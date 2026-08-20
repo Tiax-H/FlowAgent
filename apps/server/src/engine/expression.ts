@@ -50,7 +50,9 @@ export function evaluateCondition(expression: string, context: ExpressionContext
   try {
     compiled = parser.parse(normalized);
   } catch (error) {
-    throw new Error(`表达式语法错误 "${expression}": ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(
+      `表达式语法错误 "${expression}": ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 
   // 4. 求值（顶层名：input/variables/节点 id；未知名会抛错，不静默通过）
