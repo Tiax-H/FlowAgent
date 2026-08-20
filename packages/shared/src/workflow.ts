@@ -95,6 +95,14 @@ export interface LoopNodeData {
   itemVariable?: string;
   /** 待迭代集合的模板表达式 */
   collection: string;
+  /** 迭代子图（主图保持严格 DAG，环语义收敛于此）；JSON 级契约，画布可视化编辑待后续迭代 */
+  subgraph?: WorkflowSubgraph;
+}
+
+/** Loop 节点的迭代子图 */
+export interface WorkflowSubgraph {
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
 }
 
 export interface HumanNodeData {

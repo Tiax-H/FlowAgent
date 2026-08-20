@@ -21,6 +21,24 @@ model Workflow {
   @@map("workflows")
 }
 
+/// 工作流运行记录。status 为事件投影的缓存（可随时从事件重建），不是事实源。
+model WorkflowRun {
+  id               String    @id @default(cuid())
+  workflowId       String
+  workflowVersion  Int
+  input            String?
+  /// 投影缓存：pending/running/suspended/waiting_human/completed/failed/canceled
+  status           String    @default("pending")
+  output           String?
+  error            String?
+  startedAt        DateTime?
+  endedAt          DateTime?
+  createdAt        DateTime  @default(now())
+
+  @@index([workflowId])
+  @@map("workflow_runs")
+}
+
 /// 执行事件表：只追加（append-only），禁止 UPDATE/DELETE。
 /// 第 6-8 周的 Event Store 直接消费；seq 为运行内单调序号。
 model WorkflowEvent {
