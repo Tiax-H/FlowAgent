@@ -104,24 +104,39 @@ function TemplateMapEditor({
   keyPlaceholder: string;
 }) {
   const entries = Object.entries(value);
+
+  /** 保序更新：按原顺序重建，避免重命名字段时行跳位 */
+  const rebuild = (updated: Array<[string, string]>): Record<string, string> => {
+    const next: Record<string, string> = {};
+    for (const [key, template] of updated) {
+      if (key === '') continue;
+      next[key] = template;
+    }
+    return next;
+  };
+
   return (
     <div className="space-y-1">
-      {entries.map(([key, template]) => (
-        <div key={key} className="flex gap-1">
+      {entries.map(([key, template], index) => (
+        <div key={index} className="flex gap-1">
           <input
             value={key}
             onChange={(event) => {
-              const next = { ...value };
-              delete next[key];
-              next[event.target.value] = template;
-              onChange(next);
+              const newKey = event.target.value;
+              // 与其他字段重名时不更新，避免静默合并
+              if (entries.some(([other], i) => i !== index && other === newKey)) return;
+              onChange(rebuild(entries.map((entry, i) => (i === index ? [newKey, entry[1]] : entry))));
             }}
             placeholder={keyPlaceholder}
             className="w-24 rounded border border-neutral-300 px-2 py-1 text-xs"
           />
           <input
             value={template}
-            onChange={(event) => onChange({ ...value, [key]: event.target.value })}
+            onChange={(event) => {
+              const next = { ...value };
+              next[key] = event.target.value;
+              onChange(next);
+            }}
             placeholder="{{node_x.output}}"
             className="flex-1 rounded border border-neutral-300 px-2 py-1 font-mono text-xs"
           />
@@ -140,7 +155,10 @@ function TemplateMapEditor({
       ))}
       <button
         type="button"
-        onClick={() => onChange({ ...value, '': '' })}
+        onClick={() => {
+          if (entries.some(([key]) => key === '')) return;
+          onChange({ ...value, '': '' });
+        }}
         className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-50"
       >
         + 添加字段
