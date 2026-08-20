@@ -53,6 +53,9 @@ importers:
       '@prisma/client':
         specifier: ^6.2.0
         version: 6.19.3(prisma@6.19.3(typescript@5.9.3))(typescript@5.9.3)
+      expr-eval:
+        specifier: ^2.0.2
+        version: 2.0.2
       reflect-metadata:
         specifier: ^0.2.2
         version: 0.2.2
@@ -83,7 +86,7 @@ importers:
         version: 5.9.3
       unplugin-swc:
         specifier: ^1.5.5
-        version: 1.5.11(@swc/core@1.16.0)(esbuild@0.25.12)(rollup@4.62.4)(vite@6.4.3(@types/node@20.19.43)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.50.0))(webpack@5.106.2(@swc/core@1.16.0)(esbuild@0.25.12)(lightningcss@1.32.0))
+        version: 1.5.11(@swc/core@1.16.0)(esbuild@0.25.12)(rollup@4.62.4)(vite@5.4.21(@types/node@20.19.43)(lightningcss@1.32.0)(terser@5.50.0))(webpack@5.106.2(@swc/core@1.16.0)(esbuild@0.25.12)(lightningcss@1.32.0))
       vitest:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@20.19.43)(lightningcss@1.32.0)(terser@5.50.0)
@@ -2052,6 +2055,9 @@ packages:
   expect-type@1.4.0:
     resolution: {integrity: sha512-KfYbmpRm0VbLjEvVa9yGwCi9GI34xvi7A/HXYWQO65CSD2u3MczUJSuwXKFIxlGsgBQizV9q5J9NHj4VG0n+pA==}
     engines: {node: '>=12.0.0'}
+
+  expr-eval@2.0.2:
+    resolution: {integrity: sha512-4EMSHGOPSwAfBiibw3ndnP0AvjDWLsMvGOvWEZ2F96IGk0bIVdjQisOHxReSkE13mHcfbuCiXw+G4y0zv6N8Eg==}
 
   express-rate-limit@8.6.2:
     resolution: {integrity: sha512-YH4ru+eOJxQABscKFfRCy9R7x9QFGdezclVMwwgFFndzS2Xnm0uo6B0ABZsLhcpeptGv2qvuJVWlQr9gQZoC3A==}
@@ -5138,6 +5144,8 @@ snapshots:
 
   expect-type@1.4.0: {}
 
+  expr-eval@2.0.2: {}
+
   express-rate-limit@8.6.2(express@5.2.1):
     dependencies:
       debug: 4.4.3
@@ -6077,12 +6085,12 @@ snapshots:
 
   unpipe@1.0.0: {}
 
-  unplugin-swc@1.5.11(@swc/core@1.16.0)(esbuild@0.25.12)(rollup@4.62.4)(vite@6.4.3(@types/node@20.19.43)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.50.0))(webpack@5.106.2(@swc/core@1.16.0)(esbuild@0.25.12)(lightningcss@1.32.0)):
+  unplugin-swc@1.5.11(@swc/core@1.16.0)(esbuild@0.25.12)(rollup@4.62.4)(vite@5.4.21(@types/node@20.19.43)(lightningcss@1.32.0)(terser@5.50.0))(webpack@5.106.2(@swc/core@1.16.0)(esbuild@0.25.12)(lightningcss@1.32.0)):
     dependencies:
       '@rollup/pluginutils': 5.4.0(rollup@4.62.4)
       '@swc/core': 1.16.0
       load-tsconfig: 0.2.5
-      unplugin: 3.3.0(esbuild@0.25.12)(rollup@4.62.4)(vite@6.4.3(@types/node@20.19.43)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.50.0))(webpack@5.106.2(@swc/core@1.16.0)(esbuild@0.25.12)(lightningcss@1.32.0))
+      unplugin: 3.3.0(esbuild@0.25.12)(rollup@4.62.4)(vite@5.4.21(@types/node@20.19.43)(lightningcss@1.32.0)(terser@5.50.0))(webpack@5.106.2(@swc/core@1.16.0)(esbuild@0.25.12)(lightningcss@1.32.0))
     transitivePeerDependencies:
       - '@farmfe/core'
       - '@rspack/core'
@@ -6094,7 +6102,7 @@ snapshots:
       - vite
       - webpack
 
-  unplugin@3.3.0(esbuild@0.25.12)(rollup@4.62.4)(vite@6.4.3(@types/node@20.19.43)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.50.0))(webpack@5.106.2(@swc/core@1.16.0)(esbuild@0.25.12)(lightningcss@1.32.0)):
+  unplugin@3.3.0(esbuild@0.25.12)(rollup@4.62.4)(vite@5.4.21(@types/node@20.19.43)(lightningcss@1.32.0)(terser@5.50.0))(webpack@5.106.2(@swc/core@1.16.0)(esbuild@0.25.12)(lightningcss@1.32.0)):
     dependencies:
       '@jridgewell/remapping': 2.3.5
       picomatch: 4.0.5
@@ -6102,7 +6110,7 @@ snapshots:
     optionalDependencies:
       esbuild: 0.25.12
       rollup: 4.62.4
-      vite: 6.4.3(@types/node@20.19.43)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.50.0)
+      vite: 5.4.21(@types/node@20.19.43)(lightningcss@1.32.0)(terser@5.50.0)
       webpack: 5.106.2(@swc/core@1.16.0)(esbuild@0.25.12)(lightningcss@1.32.0)
 
   update-browserslist-db@1.3.1(browserslist@4.28.8):

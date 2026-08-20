@@ -30,8 +30,8 @@ function parseJson<T>(raw: string | null, fallback: T): T {
 @Injectable()
 export class RunsService implements OnModuleInit {
   private readonly logger = new Logger(RunsService.name);
-  /** 引擎注册的启动回调（阶段 B 接入，避免循环依赖由引擎 set） */
-  private runStarter: ((workflowId: string, input: unknown) => Promise<string>) | null = null;
+  /** 引擎注册的启动回调（避免循环依赖由 EngineModule 桥接 set） */
+  private runStarter: ((runId: string, workflowId: string, input: unknown) => Promise<void>) | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -45,7 +45,7 @@ export class RunsService implements OnModuleInit {
     });
   }
 
-  setRunStarter(starter: (workflowId: string, input: unknown) => Promise<string>): void {
+  setRunStarter(starter: (runId: string, workflowId: string, input: unknown) => Promise<void>): void {
     this.runStarter = starter;
   }
 
@@ -68,8 +68,9 @@ export class RunsService implements OnModuleInit {
       input: input ?? null,
     });
 
+    const inputJson = parseJson<unknown>(run.input, null);
     if (this.runStarter) {
-      void this.runStarter(workflowId, null).catch(() => undefined);
+      void this.runStarter(run.id, workflowId, inputJson).catch(() => undefined);
     }
     return run.id;
   }
