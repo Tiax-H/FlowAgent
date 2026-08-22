@@ -183,3 +183,4 @@ flowagent/
 | v1 | — | 可视化 MCP Agent 编排平台（初版） |
 | v2 | — | 重新定位为 Durable Agent Runtime；差异化三点；砍掉广度功能 |
 | v2.1 | — | 新增 Workflow→MCP Bridge（双向 MCP）；补充 Skill 对比；旗舰 Demo 定为多模型协作流水线 |
+| —（版本不变） | 2026-08-22 | 第 8 周里程碑落地：投影驱动可重入调度器、三路径恢复 API + 取消、Human 挂起持久化、节点级超时/指数退避重试、崩溃对账、运行定义快照、回放时间轴 UI。实现细节与偏差见 [docs/DURABLE_EXECUTION.md](DURABLE_EXECUTION.md) |

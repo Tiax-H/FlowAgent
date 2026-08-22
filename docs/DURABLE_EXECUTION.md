@@ -103,3 +103,12 @@ retry?: NodeRetryPolicy;
 | E | 文档同步（本文件、PROJECT_PLAN 变更记录、README roadmap） | — |
 
 红线自查：事件表只追加 ✓；引擎无旁路全局状态（内存仅存调度工作集与 pause/cancel 标志）✓；Human 挂起落库（事件即持久化）✓。
+
+## 8. 实现说明（2026-08-22 落地，与 §2-§6 设计的偏差与补强）
+
+1. **崩溃对账加投影守卫**：`reconcileOrphanRuns` 只在事件流投影为 `pending`/`running` 时追加 `RUN_SUSPENDED{crash}`；投影已是 `waiting_human`（fold 守卫保护）或终态（DB 缓存滞后于事件流）时仅重同步，避免把已完成运行误标挂起。
+2. **isRunnable 排除已解决的 Human 挂起**：`running + human + approved` 的节点视作已解决，既结算出边、也禁止被上游结算 push 进 ready——否则恢复轮次会重新执行 Human 节点并二次挂起（设计稿 §3.2 的简化版有此漏洞，实测修复）。
+3. **事件序号同步分配 + 串行落库**：并行派发时多个 `NODE_STARTED` 曾在同一 tick 读到同一 `seq`（真库将触发唯一约束冲突）；现改为 emit 调用时同步占号，落库经 promise 队列串行（同时保证 SSE 推送按 seq 有序）。
+4. **批准后的 Human 节点无 `NODE_SUCCEEDED` 事件**：投影状态保持 `running`（输出经 `humanInput` 重建），恢复轮次完成后看板上该节点显示 running 而非 succeeded，属已知外观边界。
+5. **Loop 中途崩溃恢复 = 整个 Loop 节点重跑**：子图内部不落独立节点事件（`runSubgraph` 不 emit `NODE_STARTED`），无法定位迭代内断点，重放按 Loop 节点整体重执行。
+6. **控制面 409 语义**：pause 仅对引擎在跑的 run 生效；resume 仅 `suspended`；retry 仅 `failed`；cancel 对非终态生效（在跑则排空 in-flight 后由主循环收尾）。冲突统一抛 `ConflictException`，run 不存在抛 `NotFoundException`。

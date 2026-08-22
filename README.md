@@ -75,9 +75,9 @@ FlowAgent 是执行运行时而非应用平台——不拼功能广度，把持�
 
 ## Roadmap
 
-- [ ] v0.1 — Monorepo 脚手架 + Workflow CRUD + MCP Gateway
-- [ ] v0.2 — DAG 编辑器 + Execution Engine（事件溯源）
-- [ ] v0.3 — Checkpoint/Resume + Human-in-the-loop + 回放时间轴
+- [x] v0.1 — Monorepo 脚手架 + Workflow CRUD + MCP Gateway
+- [x] v0.2 — DAG 编辑器 + Execution Engine（事件溯源）
+- [x] v0.3 — Checkpoint/Resume + Human-in-the-loop + 回放时间轴
 - [ ] v0.4 — Workflow→MCP Bridge + 示例工作流 + Docker 部署
 
 完整十周计划见 [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md#8-十周开发路线)。
