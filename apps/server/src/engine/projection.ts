@@ -10,6 +10,10 @@ export interface ProjectedNodeState {
   status: 'idle' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'suspended';
   output?: unknown;
   error?: string;
+  /** HUMAN_INPUT_RECEIVED 提交的输入（恢复时重建 Human 节点输出） */
+  humanInput?: unknown;
+  /** HUMAN_INPUT_RECEIVED 的审批结果 */
+  approved?: boolean;
 }
 
 export interface ProjectedRunState {
@@ -66,7 +70,13 @@ export function applyEvent(state: ProjectedRunState, event: WorkflowEvent): Proj
       next.waitingHumanNodeId = nodeId;
       break;
     case 'HUMAN_INPUT_RECEIVED':
-      if (node) next.nodes.set(nodeId!, { ...node, status: 'running' });
+      if (node)
+        next.nodes.set(nodeId!, {
+          ...node,
+          status: 'running',
+          humanInput: payload.input ?? null,
+          approved: payload.approved === true,
+        });
       next.status = 'running';
       next.waitingHumanNodeId = null;
       break;
@@ -114,4 +124,9 @@ export function emptyRunState(runId: string): ProjectedRunState {
 /** 事件序列 → 运行状态（完整回放） */
 export function projectRunState(runId: string, events: WorkflowEvent[]): ProjectedRunState {
   return events.reduce(applyEvent, emptyRunState(runId));
+}
+
+/** 终态判断：终态运行不可再 resume/pause */
+export function isTerminalRunStatus(status: RunStatus): boolean {
+  return status === 'completed' || status === 'failed' || status === 'canceled';
 }

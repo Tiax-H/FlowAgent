@@ -126,6 +126,22 @@ export interface WorkflowNodeBase {
   name: string;
   /** 画布坐标（仅前端使用，引擎不读） */
   position: { x: number; y: number };
+  /** 单次尝试超时（毫秒）；超时按失败尝试计入重试 */
+  timeoutMs?: number;
+  /** 失败重试策略；缺省不重试。Human 节点忽略（挂起即业务语义） */
+  retry?: NodeRetryPolicy;
+}
+
+/** 节点失败重试策略：指数退避 */
+export interface NodeRetryPolicy {
+  /** 总尝试次数上限（含首次），必须 >= 1 */
+  maxAttempts: number;
+  /** 首次重试前等待毫秒数，默认 500 */
+  initialDelayMs?: number;
+  /** 退避乘数，默认 2 */
+  backoffFactor?: number;
+  /** 单次等待上限毫秒数，默认 30000 */
+  maxDelayMs?: number;
 }
 
 /** 画布节点：`data` 按类型收窄为上述各 NodeData 接口 */

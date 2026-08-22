@@ -43,6 +43,18 @@ export const workflowJsonSchema = {
             },
             additionalProperties: false,
           },
+          timeoutMs: { type: 'number', minimum: 1 },
+          retry: {
+            type: 'object',
+            required: ['maxAttempts'],
+            properties: {
+              maxAttempts: { type: 'integer', minimum: 1, maximum: 20 },
+              initialDelayMs: { type: 'number', minimum: 0 },
+              backoffFactor: { type: 'number', minimum: 1 },
+              maxDelayMs: { type: 'number', minimum: 0 },
+            },
+            additionalProperties: false,
+          },
           data: { type: 'object' },
         },
       },

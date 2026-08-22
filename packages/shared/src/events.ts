@@ -16,6 +16,7 @@ export const WORKFLOW_EVENT_TYPES = [
   'NODE_SUCCEEDED',
   'NODE_FAILED',
   'NODE_SKIPPED',
+  'NODE_RETRYING',
   'LLM_REQUESTED',
   'LLM_TOKEN',
   'LLM_COMPLETED',
@@ -58,6 +59,15 @@ export interface NodeFailedPayload extends NodePayloadBase {
 
 export interface NodeSucceededPayload extends NodePayloadBase {
   output: unknown;
+}
+
+export interface NodeRetryingPayload extends NodePayloadBase {
+  /** 即将执行的尝试序号（从 2 开始，1 为首次失败） */
+  attempt: number;
+  maxAttempts: number;
+  /** 本次重试前的退避等待（毫秒） */
+  delayMs: number;
+  error: string;
 }
 
 export interface LlmRequestedPayload extends NodePayloadBase {

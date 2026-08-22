@@ -173,6 +173,33 @@ export class RunsService implements OnModuleInit {
       nodes,
       startedAt: state.startedAt,
       endedAt: state.endedAt,
+      waitingHuman: this.resolveWaitingHuman(state, events, nodeMetas),
+    };
+  }
+
+  /** waiting_human 时从最后一条 HUMAN_WAITING 事件提取挂起节点摘要 */
+  private resolveWaitingHuman(
+    state: ReturnType<typeof projectRunState>,
+    events: WorkflowEvent[],
+    nodeMetas: Map<string, { id: string; type: string; name: string }>,
+  ): RunSummary['waitingHuman'] {
+    if (state.status !== 'waiting_human' || !state.waitingHumanNodeId) return null;
+    const nodeId = state.waitingHumanNodeId;
+    let prompt = '';
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      const event = events[i];
+      if (!event) continue;
+      const payload = (event.payload ?? {}) as Record<string, unknown>;
+      if (event.type === 'HUMAN_WAITING' && payload.nodeId === nodeId) {
+        prompt = typeof payload.prompt === 'string' ? payload.prompt : '';
+        break;
+      }
+    }
+    return {
+      nodeId,
+      nodeType: nodeMetas.get(nodeId)?.type ?? 'unknown',
+      name: nodeMetas.get(nodeId)?.name ?? nodeId,
+      prompt,
     };
   }
 
