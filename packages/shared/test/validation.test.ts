@@ -234,3 +234,83 @@ describe('validateWorkflowDefinition', () => {
     expect(result.errors.some((error) => error.includes('island'))).toBe(true);
   });
 });
+
+describe('节点级 data 与 Loop 子图校验（2026-08-22 复审新增）', () => {
+  it('LLM 节点缺少 provider 被拒绝（人话报错）', () => {
+    const definition = baseDefinition({
+      nodes: [
+        { id: 'start', type: 'start', name: '开始', position: { x: 0, y: 0 }, data: {} },
+        { id: 'llm_1', type: 'llm', name: '缺配置', position: { x: 200, y: 0 }, data: { model: 'm', prompt: 'x' } },
+        { id: 'end', type: 'end', name: '结束', position: { x: 400, y: 0 }, data: {} },
+      ],
+      edges: [
+        { id: 'e1', source: 'start', target: 'llm_1' },
+        { id: 'e2', source: 'llm_1', target: 'end' },
+      ],
+    });
+    const result = validateWorkflowDefinition(definition);
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((error) => error.includes('llm_1') && error.includes('provider'))).toBe(true);
+  });
+
+  it('Loop 节点缺少 subgraph 被拒绝，错误指向配置入口', () => {
+    const definition = baseDefinition({
+      nodes: [
+        { id: 'start', type: 'start', name: '开始', position: { x: 0, y: 0 }, data: {} },
+        { id: 'loop_1', type: 'loop', name: '循环', position: { x: 200, y: 0 }, data: { maxIterations: 3, collection: '{{input.items}}' } },
+        { id: 'end', type: 'end', name: '结束', position: { x: 400, y: 0 }, data: {} },
+      ],
+      edges: [
+        { id: 'e1', source: 'start', target: 'loop_1' },
+        { id: 'e2', source: 'loop_1', target: 'end' },
+      ],
+    });
+    const result = validateWorkflowDefinition(definition);
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((error) => error.includes('loop_1') && error.includes('子图'))).toBe(true);
+  });
+
+  it('Loop 子图成环被拒绝（主图 DAG 校验覆盖不到的盲区）', () => {
+    const definition = baseDefinition({
+      nodes: [
+        { id: 'start', type: 'start', name: '开始', position: { x: 0, y: 0 }, data: {} },
+        {
+          id: 'loop_1',
+          type: 'loop',
+          name: '循环',
+          position: { x: 200, y: 0 },
+          data: {
+            maxIterations: 3,
+            collection: '{{input.items}}',
+            subgraph: {
+              nodes: [
+                { id: 'a', type: 'transform', name: 'A', position: { x: 0, y: 0 }, data: { template: { x: '1' } } },
+                { id: 'b', type: 'transform', name: 'B', position: { x: 100, y: 0 }, data: { template: { y: '2' } } },
+              ],
+              edges: [
+                { id: 's1', source: 'a', target: 'b' },
+                { id: 's2', source: 'b', target: 'a' },
+              ],
+            },
+          },
+        },
+        { id: 'end', type: 'end', name: '结束', position: { x: 400, y: 0 }, data: {} },
+      ],
+      edges: [
+        { id: 'e1', source: 'start', target: 'loop_1' },
+        { id: 'e2', source: 'loop_1', target: 'end' },
+      ],
+    });
+    const result = validateWorkflowDefinition(definition);
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((error) => error.includes('子图') && error.includes('环'))).toBe(true);
+  });
+
+  it('合法定义（含 Ajv 中文映射路径）报错可读', () => {
+    const broken = baseDefinition();
+    (broken as Record<string, unknown>).nodes = 'not-an-array';
+    const result = validateWorkflowDefinition(broken);
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((error) => error.includes('字段类型应为'))).toBe(true);
+  });
+});

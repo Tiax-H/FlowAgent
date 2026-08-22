@@ -25,6 +25,12 @@ export class RunsController {
     return this.runsService.getRun(id);
   }
 
+  /** 轻量状态端点（bridge 轮询用）：只读缓存列，零事件回放 */
+  @Get('runs/:id/status')
+  async getRunStatus(@Param('id') id: string): Promise<{ id: string; status: string }> {
+    return this.runsService.getRunStatus(id);
+  }
+
   @Get('runs/:id/events')
   async getEvents(@Param('id') id: string): Promise<unknown[]> {
     return this.runsService.getEvents(id);

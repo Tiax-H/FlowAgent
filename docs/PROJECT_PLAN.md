@@ -121,11 +121,11 @@ RAG/知识库节点、应用发布、模板市场、多租户、协作编辑。
 | Monorepo | pnpm + Turborepo |
 | 后端 | NestJS + TypeScript |
 | 前端 | React 18 + Vite + @xyflow/react（React Flow） |
-| UI | Tailwind CSS + shadcn/ui |
+| UI | Tailwind CSS（自绘轻量组件，不引入重组件库） |
 | LLM | OpenAI 兼容客户端（自定义 baseURL，支持聚合平台） |
 | MCP | @modelcontextprotocol/sdk（stdio + Streamable HTTP） |
 | 数据库 | SQLite + Prisma |
-| 实时 | SSE（执行事件流）+ WebSocket（Human 交互） |
+| 实时 | SSE（执行事件流，Last-Event-ID 续传）；Human 审批经 REST POST |
 | 质量 | Vitest + ESLint + Prettier + GitHub Actions CI |
 | 交付 | Docker Compose 一键部署 |
 
@@ -187,3 +187,4 @@ flowagent/
 | —（版本不变） | 2026-08-22 | 第 9 周 Workflow→MCP Bridge 落地：apps/bridge 独立进程（stdio/Streamable HTTP），通用 + 每工作流动态工具，runId 持久句柄 + 轮询替代协议级 Tasks（SDK experimental 暂不采用） |
 | —（版本不变） | 2026-08-22 | 第 9 周 demo Server 补齐：servers/sandbox（限额子进程 JS 执行）与 servers/report（Markdown 报告/引用生成），对齐 §7 目录结构 |
 | —（版本不变） | 2026-08-22 | 第 9 周收尾：demo/ 三个示例工作流资产（旗舰多模型协作/深度研究/代码审查）、seed:demos 一键导入、编辑器导入导出与列表删除（§8 旗舰/辅助 Demo 落地） |
+| —（版本不变） | 2026-08-22 | **多代理对抗式全面复审后修订**（可行性/性能/UX/安全四维批判）：事件写入收敛为 per-run 原子串行队列（修控制面与调度器并发撞 seq 的 Blocker）、终态事件屏障幂等、控制面互斥 + 纪元化暂停意图、SSE 先订后回 + Last-Event-ID 续传 + 心跳、读路径分层（列表/bridge 轮询走投影缓存列，零回放）、事件 payload 64KB 截断、SQLite WAL、LLM 超时透传真中止、sandbox 内存/并发限额、全链路默认监听 127.0.0.1 + CORS 白名单、节点级 data 与 Loop 子图 DAG 校验、画布往返保留 timeoutMs/retry、Loop 子图 JSON 编辑入口、运行输入对话框、编辑器 dirty 守卫与保存失败阻断运行、失败 run 断点重试按钮修复、README 快速开始补 db:generate/migrate。技术选型勘误：实时层为 REST + SSE（原表述 WS 未实现）；UI 组件为 Tailwind 自绘轻量组件（未引入 shadcn/ui，维持"不引入重组件库"约束）。并发/副作用契约与已知边界详见 DURABLE_EXECUTION.md §9 |

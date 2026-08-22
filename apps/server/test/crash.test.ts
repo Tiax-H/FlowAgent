@@ -37,15 +37,15 @@ describe('崩溃恢复与失败断点重试', () => {
     const eventStore = new MemoryEventStore();
 
     // 手工构造「崩溃前」的事件流：start 与 t1 已完成，t2 未开始
-    await eventStore.append('run_1', 1, 'RUN_STARTED', { workflowId: 'wf_1', input: null });
-    await eventStore.append('run_1', 2, 'NODE_STARTED', { nodeId: 'start', nodeType: 'start' });
-    await eventStore.append('run_1', 3, 'NODE_SUCCEEDED', {
+    await eventStore.append('run_1', 'RUN_STARTED', { workflowId: 'wf_1', input: null });
+    await eventStore.append('run_1', 'NODE_STARTED', { nodeId: 'start', nodeType: 'start' });
+    await eventStore.append('run_1', 'NODE_SUCCEEDED', {
       nodeId: 'start',
       nodeType: 'start',
       output: null,
     });
-    await eventStore.append('run_1', 4, 'NODE_STARTED', { nodeId: 't1', nodeType: 'transform' });
-    await eventStore.append('run_1', 5, 'NODE_SUCCEEDED', {
+    await eventStore.append('run_1', 'NODE_STARTED', { nodeId: 't1', nodeType: 'transform' });
+    await eventStore.append('run_1', 'NODE_SUCCEEDED', {
       nodeId: 't1',
       nodeType: 'transform',
       output: { greeting: '你好' },
@@ -80,14 +80,14 @@ describe('崩溃恢复与失败断点重试', () => {
     );
     const eventStore = new MemoryEventStore();
     // start 已完成，t1 只发了 NODE_STARTED 即崩溃
-    await eventStore.append('run_1', 1, 'RUN_STARTED', { workflowId: 'wf_1', input: null });
-    await eventStore.append('run_1', 2, 'NODE_STARTED', { nodeId: 'start', nodeType: 'start' });
-    await eventStore.append('run_1', 3, 'NODE_SUCCEEDED', {
+    await eventStore.append('run_1', 'RUN_STARTED', { workflowId: 'wf_1', input: null });
+    await eventStore.append('run_1', 'NODE_STARTED', { nodeId: 'start', nodeType: 'start' });
+    await eventStore.append('run_1', 'NODE_SUCCEEDED', {
       nodeId: 'start',
       nodeType: 'start',
       output: null,
     });
-    await eventStore.append('run_1', 4, 'NODE_STARTED', { nodeId: 't1', nodeType: 'transform' });
+    await eventStore.append('run_1', 'NODE_STARTED', { nodeId: 't1', nodeType: 'transform' });
 
     const engine = makeEngine(eventStore, definition);
     await engine.execute('run_1');

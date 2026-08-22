@@ -6,6 +6,7 @@
  */
 import type { AgentNodeData, McpToolBinding } from '@flowagent/shared';
 
+import { truncateForEvent } from '../payload';
 import { renderDeep } from '../template';
 import type { NodeExecutionResult, NodeExecutor, NodeRuntimeServices } from './types';
 
@@ -20,11 +21,22 @@ export function createAgentExecutor(services: NodeRuntimeServices): NodeExecutor
     const bindings: McpToolBinding[] = data.tools ?? [];
     const toolSchemas = await services.listToolSchemas(bindings);
 
-    // 工具名映射：MCP 全限定名 <-> LLM 函数名（函数名不允许冒号）
+    // 工具名映射：MCP 全限定名 <-> LLM 函数名（函数名不允许冒号）。
+    // 净化可能碰撞（server "a:b"+tool "c" 与 server "a_b"+tool "c" 同名）：碰撞即报错，绝不静默错路由
     const functionToBinding = new Map<string, McpToolBinding>();
     const tools = toolSchemas.map((schema) => {
       const functionName = `${schema.server}__${schema.tool}`.replace(/[^a-zA-Z0-9_-]/g, '_');
-      functionToBinding.set(functionName, { server: schema.server, tool: schema.tool });
+      const binding: McpToolBinding = { server: schema.server, tool: schema.tool };
+      const existing = functionToBinding.get(functionName);
+      if (
+        existing &&
+        (existing.server !== binding.server || existing.tool !== binding.tool)
+      ) {
+        throw new Error(
+          `工具函数名碰撞: "${functionName}" 同时映射 ${existing.server}:${existing.tool} 与 ${schema.server}:${schema.tool}，请重命名 MCP Server`,
+        );
+      }
+      functionToBinding.set(functionName, binding);
       return {
         type: 'function' as const,
         function: {
@@ -68,6 +80,9 @@ export function createAgentExecutor(services: NodeRuntimeServices): NodeExecutor
         messages: [...messages],
         tools: tools.length > 0 ? tools : undefined,
         temperature: data.temperature,
+        // 节点超时透传给 Adapter：超时真正中止底层请求，而不是留下僵尸调用
+        timeoutMs:
+          typeof node.timeoutMs === 'number' && node.timeoutMs > 0 ? node.timeoutMs : undefined,
       });
 
       // 无工具调用：终轮
@@ -76,7 +91,7 @@ export function createAgentExecutor(services: NodeRuntimeServices): NodeExecutor
         await emit('LLM_COMPLETED', {
           nodeId: node.id,
           nodeType: node.type,
-          content: result.content ?? '',
+          content: truncateForEvent(result.content ?? ''),
           usage: result.usage,
         });
         break;
@@ -132,7 +147,7 @@ export function createAgentExecutor(services: NodeRuntimeServices): NodeExecutor
             server: binding.server,
             tool: binding.tool,
             ok: outcome.ok,
-            result: outcome.result,
+            result: truncateForEvent(outcome.result),
           });
 
           return { call, ...outcome };

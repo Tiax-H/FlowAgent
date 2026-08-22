@@ -207,7 +207,15 @@ export function McpServersPage() {
                 <button
                   type="button"
                   disabled={busy}
-                  onClick={() => void handleAction(() => mcpApi.removeServer(server.id))}
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        `删除 MCP Server「${server.name}」？引用其工具的节点将无法运行，此操作不可恢复。`,
+                      )
+                    ) {
+                      void handleAction(() => mcpApi.removeServer(server.id));
+                    }
+                  }}
                   className="rounded border border-red-200 px-2 py-1 text-xs text-red-600 hover:bg-red-50"
                 >
                   删除
@@ -215,7 +223,9 @@ export function McpServersPage() {
               </span>
             </header>
             {server.statusMessage && (
-              <p className="mt-2 truncate text-xs text-red-500">{server.statusMessage}</p>
+              <p className="mt-2 truncate text-xs text-red-500" title={server.statusMessage}>
+                {server.statusMessage}
+              </p>
             )}
             <ul className="mt-3 space-y-1">
               {(toolsByServer.get(server.id) ?? []).map((tool) => (

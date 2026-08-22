@@ -14,7 +14,7 @@
 ## 核心特性
 
 - **Durable Execution** — 事件溯源记录每次状态变更；失败断点恢复 / 主动暂停恢复 / Human 挂起恢复，三路径一套机制
-- **MCP 原生** — stdio + Streamable HTTP 双传输；工具运行时动态发现与热更新（对齐 MCP 2026-07-28 规范）；长任务走 Tasks 扩展
+- **MCP 原生** — stdio + Streamable HTTP 双传输；工具运行时动态发现与热更新（对齐 MCP 2026-07-28 规范）；长任务经 runId 持久句柄轮询
 - **多模型路由** — 每个 Agent 节点独立绑定 Provider + 模型；OpenAI 兼容适配层，一把聚合平台 key 即可体验全部能力
 - **双向 MCP** — 向下编排任意 MCP 工具；向上把整个工作流反向暴露为 MCP Server，供 Claude Code / Codex 作为工具调用
 - **可视化编排** — 基于 React Flow 的 DAG 画布：并行分支、条件、循环、人工介入；执行过程节点级实时状态与日志流
@@ -24,7 +24,7 @@
 
 ```
 ┌──────── Web：DAG 画布(React Flow) + 运行监控 + 执行回放时间轴 ────────┐
-└──────────────── REST + SSE(执行事件流) + WS(Human 交互) ─────────────┘
+└──────── REST + SSE(执行事件流；Human 审批经 REST POST) ───────────────┘
 ┌─────────────────────────── Server (NestJS + TS) ──────────────────────┐
 │ Workflow │ Run │ Event Store(事件溯源) │ LLM Adapter(多模型路由)         │
 │ Execution Engine: 状态机 → 拓扑调度 → 并行/条件/Loop → checkpoint       │
@@ -37,22 +37,20 @@
 
 ## 快速开始
 
-> 项目处于积极开发阶段（目标 v0.1），以下命令将在首个里程碑后可用。
+> 项目处于积极开发阶段（目标 v0.1）。
 
 ```bash
-# 前置：Node >= 20, pnpm >= 9, Docker
+# 前置：Node >= 20, pnpm >= 9
 git clone https://github.com/Tiax-H/FlowAgent.git
 cd FlowAgent
 pnpm install
 cp .env.example .env        # 填入你的 LLM Provider 配置
+pnpm db:generate            # 生成 Prisma Client（首次必做）
+pnpm db:migrate             # 建表（SQLite，首次必做）
 pnpm dev                    # 同时启动 server(:3000) 与 web(:5173)
 ```
 
-Docker 一键部署：
-
-```bash
-docker compose up -d
-```
+> 安全默认值：server 只监听 `127.0.0.1`，CORS 仅放行本地前端。远程使用请自行置于反向代理与鉴权之后（`HOST`/`CORS_ORIGINS` 环境变量可调）。Docker 一键部署在 Roadmap v0.4（尚未提供 compose 文件）。
 
 ### 把工作流当工具用（Workflow→MCP Bridge）
 
@@ -85,9 +83,9 @@ pnpm seed:demos        # 按名称幂等，重复执行只跳过不覆盖
 
 或在画布编辑器里用「导入 JSON」按钮导入 `demo/workflows/*.json`，「导出 JSON」可把当前画布存为文件分享。
 
-首次运行前：`.env` 按示例配置 Provider（聚合平台一把 key 即可），在 MCP Servers 页连接 search/sandbox/report（命令见 `.env.example`）。
+首次运行前：`.env` 按示例配置 Provider（聚合平台一把 key 即可），在 MCP Servers 页手动添加 search/sandbox/report 连接（先 `pnpm build` 生成 dist，命令用绝对路径，示例见 `.env.example` 注释）。
 
-运行输入：三个 demo 分别消费 `input.topic`（旗舰/深度研究）与 `input.diff`（代码审查）。Web UI 的「▶ 运行」当前以空输入启动（提示词会优雅降级为空主题/空 diff）；要传入输入可走 API：
+运行输入：三个 demo 分别消费 `input.topic`（旗舰/深度研究）与 `input.diff`（代码审查）。Web UI 的「▶ 运行」会先弹出输入对话框，直接填 JSON（如 `{"topic": "MCP 生态现状"}`）即可；也可走 API：
 
 ```bash
 curl -X POST http://localhost:3000/api/workflows/<工作流id>/runs \
@@ -97,7 +95,7 @@ curl -X POST http://localhost:3000/api/workflows/<工作流id>/runs \
 
 （或经 Workflow→MCP Bridge 的工具 `input` 参数传入。）
 
-> 注：画布「导入 JSON → 保存」的往返会丢弃节点级 `timeoutMs`/`retry` 等字段（画布模型限制），demo 的推荐加载方式是 `pnpm seed:demos`（保留完整定义，含重试/超时策略）。
+> 注：画布「导入 JSON → 保存」会完整保留节点级 `timeoutMs`/`retry` 字段（暂存于节点内部，导出时还原）；Loop 子图经属性面板的「子图 JSON」配置。
 
 ## Non-Goals
 

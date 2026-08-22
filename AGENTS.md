@@ -39,7 +39,7 @@ pnpm lint             # ESLint + Prettier
 
 - **语言**：全 TypeScript strict 模式（基座 tsconfig.base.json），禁止 `any`（确需逃逸用 `unknown` + 收窄）
 - **后端**：NestJS 模块化，遵循依赖注入；新功能先建模块再挂路由
-- **前端**：React 18 + @xyflow/react；UI 组件用 shadcn/ui + Tailwind，不引入其他组件库
+- **前端**：React 18 + @xyflow/react；UI 用 Tailwind CSS 自绘轻量组件，不引入重组件库
 - **LLM 调用**：只通过 LLM Adapter（OpenAI 兼容 + 自定义 baseURL），任何模块不得直接 import 厂商 SDK
 - **MCP**：只用 @modelcontextprotocol/sdk；工具调用必须经过 MCP Gateway 的工具注册表路由
 - **数据库**：Prisma；改 schema 必须附迁移；事件表只追加（append-only），禁止 UPDATE/DELETE

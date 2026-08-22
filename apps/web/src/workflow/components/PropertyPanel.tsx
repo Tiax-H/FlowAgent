@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Node } from '@xyflow/react';
 import type {
   AgentNodeData,
@@ -27,6 +27,7 @@ interface PropertyPanelProps {
 interface NodeDataShape extends Record<string, unknown> {
   nodeType: NodeType;
   name: string;
+  __nodeExtras?: { timeoutMs?: number; retry?: { maxAttempts?: number } };
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -66,12 +67,63 @@ function NumberInput(props: {
     <input
       type="number"
       value={props.value ?? ''}
-      onChange={(event) =>
-        props.onChange(event.target.value === '' ? undefined : Number(event.target.value))
-      }
+      onChange={(event) => {
+        if (event.target.value === '') {
+          props.onChange(undefined);
+          return;
+        }
+        const parsed = Number(event.target.value);
+        // 中间态（如 "-"）与非法输入不写回，避免 NaN 进定义
+        props.onChange(Number.isFinite(parsed) ? parsed : undefined);
+      }}
       placeholder={props.placeholder}
       className={inputClass}
     />
+  );
+}
+
+/** JSON 文本域：本地草稿编辑，合法即提交，非法标红提示（不吞键击、不清空内容） */
+function JsonField(props: {
+  value: unknown;
+  onChange: (value: unknown) => void;
+  rows?: number;
+  placeholder?: string;
+}) {
+  const [draft, setDraft] = useState(() => JSON.stringify(props.value ?? {}, null, 0));
+  const [invalid, setInvalid] = useState(false);
+  /** 最近一次本地提交的值：外部值与之不同（切换节点/导入）才回写草稿，避免提交后光标跳动 */
+  const lastCommittedRef = useRef<unknown>(props.value);
+
+  useEffect(() => {
+    if (JSON.stringify(props.value ?? {}) !== JSON.stringify(lastCommittedRef.current ?? {})) {
+      setDraft(JSON.stringify(props.value ?? {}, null, 0));
+      setInvalid(false);
+      lastCommittedRef.current = props.value;
+    }
+  }, [props.value]);
+
+  return (
+    <div>
+      <textarea
+        value={draft}
+        onChange={(event) => {
+          const next = event.target.value;
+          setDraft(next);
+          try {
+            const parsed = JSON.parse(next) as unknown;
+            lastCommittedRef.current = parsed;
+            props.onChange(parsed);
+            setInvalid(false);
+          } catch {
+            setInvalid(true);
+          }
+        }}
+        rows={props.rows ?? 4}
+        placeholder={props.placeholder}
+        className={`${inputClass} font-mono text-xs ${invalid ? 'border-red-400 bg-red-50' : ''}`}
+      />
+      {invalid && <p className="mt-1 text-[10px] text-red-500">JSON 格式暂不合法，修正后生效</p>}
+    </div>
   );
 }
 
@@ -171,10 +223,12 @@ function AgentForm({
   data,
   onChange,
   tools,
+  toolsError,
 }: {
   data: AgentNodeData;
   onChange: (patch: Partial<AgentNodeData>) => void;
   tools: McpTool[];
+  toolsError: string | null;
 }) {
   const bound: McpToolBinding[] = data.tools ?? [];
   return (
@@ -204,7 +258,7 @@ function AgentForm({
       </Field>
       <Field label="绑定 MCP 工具">
         {tools.length === 0 ? (
-          <p className="text-xs text-neutral-400">注册表为空，请先在 MCP Servers 页添加</p>
+          toolsError ? (<p className="text-xs text-red-500">工具列表加载失败：{toolsError}</p>) : (<p className="text-xs text-neutral-400">注册表为空，请先在 MCP Servers 页添加</p>)
         ) : (
           <div className="max-h-40 space-y-1 overflow-auto rounded border border-neutral-200 p-2">
             {tools.map((tool) => {
@@ -322,13 +376,19 @@ export function PropertyPanel({ node, onChange, onDelete }: PropertyPanelProps) 
   const data = node.data as NodeDataShape;
   const meta = NODE_TYPE_META[data.nodeType];
   const [tools, setTools] = useState<McpTool[]>([]);
+  const [toolsError, setToolsError] = useState<string | null>(null);
 
   useEffect(() => {
     if (data.nodeType === 'agent' || data.nodeType === 'tool') {
+      setToolsError(null);
       void mcpApi
         .listTools()
         .then(setTools)
-        .catch(() => setTools([]));
+        .catch((cause: unknown) => {
+          // 区分"没配置"与"加载失败"，网络错误不能伪装成空注册表
+          setTools([]);
+          setToolsError(cause instanceof Error ? cause.message : String(cause));
+        });
     }
   }, [data.nodeType]);
 
@@ -341,7 +401,9 @@ export function PropertyPanel({ node, onChange, onDelete }: PropertyPanelProps) 
         <code className="text-[10px] text-neutral-400">{node.id}</code>
         <button
           type="button"
-          onClick={onDelete}
+          onClick={() => {
+            if (window.confirm(`删除节点「${data.name}」及其连线？`)) onDelete();
+          }}
           className="ml-auto rounded border border-red-200 px-2 py-0.5 text-xs text-red-500 hover:bg-red-50"
         >
           删除节点
@@ -355,16 +417,9 @@ export function PropertyPanel({ node, onChange, onDelete }: PropertyPanelProps) 
 
         {data.nodeType === 'start' && (
           <Field label="输入 Schema（JSON，可选）">
-            <TextArea
-              value={JSON.stringify((data as unknown as StartNodeData).inputSchema ?? {}, null, 0)}
-              onChange={(value) => {
-                try {
-                  onChange({ inputSchema: JSON.parse(value) as Record<string, unknown> });
-                } catch {
-                  // 输入中暂不合法时不更新
-                }
-              }}
-              mono
+            <JsonField
+              value={(data as unknown as StartNodeData).inputSchema ?? {}}
+              onChange={(inputSchema) => onChange({ inputSchema })}
               rows={5}
             />
           </Field>
@@ -385,6 +440,7 @@ export function PropertyPanel({ node, onChange, onDelete }: PropertyPanelProps) 
             data={data as unknown as AgentNodeData}
             onChange={(patch) => onChange(patch as Record<string, unknown>)}
             tools={tools}
+            toolsError={toolsError}
           />
         )}
 
@@ -422,7 +478,7 @@ export function PropertyPanel({ node, onChange, onDelete }: PropertyPanelProps) 
           <div className="space-y-3">
             <Field label="选择 MCP 工具">
               {tools.length === 0 ? (
-                <p className="text-xs text-neutral-400">注册表为空，请先在 MCP Servers 页添加</p>
+                toolsError ? (<p className="text-xs text-red-500">工具列表加载失败：{toolsError}</p>) : (<p className="text-xs text-neutral-400">注册表为空，请先在 MCP Servers 页添加</p>)
               ) : (
                 <select
                   value={`${(data as unknown as ToolNodeData).server ?? ''}:${(data as unknown as ToolNodeData).tool ?? ''}`}
@@ -442,16 +498,9 @@ export function PropertyPanel({ node, onChange, onDelete }: PropertyPanelProps) 
               )}
             </Field>
             <Field label="参数 JSON（值支持模板）">
-              <TextArea
-                value={JSON.stringify((data as unknown as ToolNodeData).args ?? {}, null, 0)}
-                onChange={(value) => {
-                  try {
-                    onChange({ args: JSON.parse(value) as Record<string, unknown> });
-                  } catch {
-                    // 输入中暂不合法时不更新
-                  }
-                }}
-                mono
+              <JsonField
+                value={(data as unknown as ToolNodeData).args ?? {}}
+                onChange={(args) => onChange({ args })}
                 rows={4}
               />
             </Field>
@@ -497,6 +546,16 @@ export function PropertyPanel({ node, onChange, onDelete }: PropertyPanelProps) 
                 mono
               />
             </Field>
+            <Field label="子图 JSON（nodes/edges，画布暂不支持可视化编辑）">
+              <JsonField
+                value={
+                  (data as unknown as LoopNodeData).subgraph ?? { nodes: [], edges: [] }
+                }
+                onChange={(subgraph) => onChange({ subgraph })}
+                rows={8}
+                placeholder='{"nodes":[{"id":"step","type":"llm",...}],"edges":[]}'
+              />
+            </Field>
           </div>
         )}
 
@@ -508,7 +567,7 @@ export function PropertyPanel({ node, onChange, onDelete }: PropertyPanelProps) 
                 onChange={(prompt) => onChange({ prompt })}
               />
             </Field>
-            <Field label="超时（秒，空=无限等待）">
+            <Field label="超时（秒，空=无限等待；超时中止暂未实现）">
               <NumberInput
                 value={(data as unknown as HumanNodeData).timeoutSeconds}
                 onChange={(timeoutSeconds) => onChange({ timeoutSeconds })}
@@ -528,6 +587,44 @@ export function PropertyPanel({ node, onChange, onDelete }: PropertyPanelProps) 
               keyPlaceholder="字段名"
             />
           </Field>
+        )}
+
+        {/* 节点级韧性配置：暂存于 data.__nodeExtras，保存时还原为定义顶层字段（见 convert.ts） */}
+        {data.nodeType !== 'human' && (
+          <details className="rounded border border-neutral-200 p-2">
+            <summary className="cursor-pointer text-xs font-medium text-neutral-500">
+              高级：超时与重试
+            </summary>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <Field label="单次超时 (ms)">
+                <NumberInput
+                  value={(data.__nodeExtras as { timeoutMs?: number } | undefined)?.timeoutMs}
+                  onChange={(timeoutMs) =>
+                    onChange({ __nodeExtras: { ...(data.__nodeExtras as object), timeoutMs } })
+                  }
+                  placeholder="60000"
+                />
+              </Field>
+              <Field label="重试次数上限">
+                <NumberInput
+                  value={(data.__nodeExtras as { retry?: { maxAttempts?: number } } | undefined)
+                    ?.retry?.maxAttempts}
+                  onChange={(maxAttempts) =>
+                    onChange({
+                      __nodeExtras: {
+                        ...(data.__nodeExtras as object),
+                        retry: maxAttempts === undefined ? undefined : { maxAttempts },
+                      },
+                    })
+                  }
+                  placeholder="1（不重试）"
+                />
+              </Field>
+            </div>
+            <p className="mt-1 text-[10px] text-neutral-400">
+              超时未配置时不限制；重试按指数退避（见文档）。
+            </p>
+          </details>
         )}
       </div>
     </aside>

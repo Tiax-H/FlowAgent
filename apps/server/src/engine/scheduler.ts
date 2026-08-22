@@ -41,9 +41,14 @@ import { createHumanExecutor, createLoopExecutor } from './executors/human-loop.
 import { createLlmExecutor, createToolExecutor } from './executors/llm-tool.executors';
 import { endExecutor, startExecutor, transformExecutor } from './executors/simple.executors';
 import type { NodeExecutionResult, NodeRuntimeServices } from './executors/types';
+import { truncateForEvent } from './payload';
 import { type TemplateContext } from './template';
 
-type EmitFn = (type: WorkflowEventType, payload: Record<string, unknown>) => Promise<void>;
+/** 事件发射器：经 EventStore 的 per-run 串行队列原子分配 seq 并落库，返回实际事件序号 */
+type EmitFn = (
+  type: WorkflowEventType,
+  payload: Record<string, unknown>,
+) => Promise<number>;
 
 function createExecutorFactory(services: NodeRuntimeServices) {
   const agent = createAgentExecutor(services);
@@ -80,8 +85,6 @@ const conditionExecutor = async ({
 }: {
   node: WorkflowNode;
   context: TemplateContext;
-  nextSeq: () => number;
-  emit: EmitFn;
 }): Promise<{ output: unknown; suspended?: boolean }> => {
   const data = node.data as Partial<ConditionNodeData>;
   const branches = data.branches ?? [];
@@ -142,7 +145,6 @@ export async function runSubgraph(
     const result = await executor({
       node,
       context: { ...context, nodeOutputs: outputs },
-      nextSeq: () => 0,
       emit,
     });
     outputs[node.id] = { output: result.output };
@@ -267,8 +269,13 @@ export function rebuildSchedulingWorkset(
     indegree.set(target, remaining);
     if (remaining === 0 && isRunnable(target)) ready.push(target);
   };
-  // 剪枝链记账：等价于运行期 skipDownstream——减一，仅当恰好归零时递归；永不 push ready
+  // 剪枝链记账：等价于运行期 skipDownstream——减一，仅当恰好归零时递归；永不 push ready。
+  // 幂等：condition 回放与 skipped 节点回放可能对同一子树各触发一次（菱形汇合），
+  // 不去重会把汇合点入度双扣导致其永不 ready
+  const killedSubtrees = new Set<string>();
   const killSubtree = (id: string): void => {
+    if (killedSubtrees.has(id)) return;
+    killedSubtrees.add(id);
     for (const target of adjacency.get(id) ?? []) {
       const remaining = (indegree.get(target) ?? 0) - 1;
       indegree.set(target, remaining);
@@ -348,8 +355,13 @@ export class EngineService {
   private readonly running = new Set<string>();
   /** 前一轮退出前收到重入请求的 run：需在前一轮结束后补跑一轮 */
   private readonly pendingRounds = new Set<string>();
-  private readonly pauseRequested = new Set<string>();
-  private readonly cancelRequested = new Set<string>();
+  /** 调度轮次纪元：控制面意图（暂停/取消）绑定纪元，过期意图不会被新一轮消费 */
+  private readonly epochs = new Map<string, number>();
+  /** 暂停/取消意图：runId -> 发起时的调度轮次纪元 */
+  private readonly pauseRequested = new Map<string, number>();
+  private readonly cancelRequested = new Map<string, number>();
+  /** 控制面互斥：同一 run 的控制动作串行执行，双击审批/并发 resume 不会写重复事件 */
+  private readonly controlLocks = new Map<string, Promise<unknown>>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -358,6 +370,21 @@ export class EngineService {
     private readonly mcpRegistry: McpRegistryService,
     private readonly runsService: RunsService,
   ) {}
+
+  /** 控制面互斥包装：按 runId 排队执行，防止并发控制请求各自读到过期投影 */
+  private async withControlLock<T>(runId: string, action: () => Promise<T>): Promise<T> {
+    const previous = this.controlLocks.get(runId) ?? Promise.resolve();
+    const next = previous.then(action, action);
+    const tail = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.controlLocks.set(runId, tail);
+    void tail.then(() => {
+      if (this.controlLocks.get(runId) === tail) this.controlLocks.delete(runId);
+    });
+    return next;
+  }
 
   /** 调度入口（可重入）：回放事件重建状态后从断点继续；前一轮仍在执行时登记补跑，避免恢复事件被静默丢弃 */
   async execute(runId: string): Promise<void> {
@@ -369,85 +396,114 @@ export class EngineService {
     try {
       do {
         this.pendingRounds.delete(runId);
+        const epoch = (this.epochs.get(runId) ?? 0) + 1;
+        this.epochs.set(runId, epoch);
         try {
-          await this.doExecute(runId);
+          await this.doExecute(runId, epoch);
         } catch (error) {
           this.logger.error(`run ${runId} 调度器异常: ${String(error)}`);
           await this.terminate(runId, 'RUN_FAILED', {
             error: `调度器异常: ${error instanceof Error ? error.message : String(error)}`,
-          }).catch(() => undefined);
+          }).catch((terminateError: unknown) => {
+            // 终态事件落库失败只能记录：投影停留 running，重启后由崩溃对账兜底
+            this.logger.error(`run ${runId} 终态事件落库失败: ${String(terminateError)}`);
+          });
           break;
         }
       } while (this.pendingRounds.has(runId));
     } finally {
       this.running.delete(runId);
+      this.epochs.delete(runId);
+      // 残留意图（含收尾窗口内到达的）随本轮一并清除，绝不污染下一次执行
+      this.pauseRequested.delete(runId);
+      this.cancelRequested.delete(runId);
     }
   }
 
   /* ---------------- 控制面：三条恢复路径 + 暂停/取消 ---------------- */
 
-  /** 主动暂停：仅设置内存标志，主循环在调度间隙停机后补发 RUN_SUSPENDED */
+  /** 主动暂停：登记纪元化内存标志，主循环在调度间隙停机后补发 RUN_SUSPENDED */
   async pause(runId: string): Promise<void> {
     await this.runsService.ensureRun(runId);
     if (!this.running.has(runId)) throw new ConflictException('运行不在执行中，无法暂停');
-    this.pauseRequested.add(runId);
+    this.pauseRequested.set(runId, this.epochs.get(runId) ?? 0);
   }
 
   /** 取消：在跑则设标志由主循环收尾发 RUN_CANCELED；不在跑则直接追加 */
   async cancel(runId: string): Promise<void> {
     await this.runsService.ensureRun(runId);
     if (this.running.has(runId)) {
-      this.cancelRequested.add(runId);
+      this.cancelRequested.set(runId, this.epochs.get(runId) ?? 0);
       return;
     }
-    const { projected } = await this.loadProjection(runId);
-    if (isTerminalRunStatus(projected.status)) {
-      throw new ConflictException('运行已处于终态，无法取消');
-    }
-    await this.appendEvent(runId, 'RUN_CANCELED', { reason: 'user' });
-    await this.runsService.syncFromProjection(runId);
+    await this.withControlLock(runId, async () => {
+      const { projected } = await this.loadProjection(runId);
+      if (isTerminalRunStatus(projected.status)) {
+        throw new ConflictException('运行已处于终态，无法取消');
+      }
+      await this.appendEvent(runId, 'RUN_CANCELED', { reason: 'user' });
+      await this.runsService.syncFromProjection(runId);
+    });
   }
 
   /** 恢复：suspended（主动暂停 / 崩溃）→ 追加 RUN_RESUMED 后重入调度 */
   async resume(runId: string): Promise<void> {
-    await this.runsService.ensureRun(runId);
-    const { projected } = await this.loadProjection(runId);
-    if (projected.status !== 'suspended') throw new ConflictException('仅挂起状态的运行可恢复');
-    await this.appendEvent(runId, 'RUN_RESUMED', { mode: 'resume' });
-    void this.execute(runId).catch(() => undefined);
+    await this.withControlLock(runId, async () => {
+      await this.runsService.ensureRun(runId);
+      const { projected } = await this.loadProjection(runId);
+      if (projected.status !== 'suspended') {
+        throw new ConflictException('仅挂起状态的运行可恢复');
+      }
+      await this.appendEvent(runId, 'RUN_RESUMED', { mode: 'resume' });
+      void this.execute(runId).catch(() => undefined);
+    });
   }
 
   /** 失败断点重试：failed 节点重新武装后从断点继续 */
   async retryFailed(runId: string): Promise<void> {
-    await this.runsService.ensureRun(runId);
-    const { projected } = await this.loadProjection(runId);
-    if (projected.status !== 'failed') throw new ConflictException('仅失败的运行可从断点重试');
-    await this.appendEvent(runId, 'RUN_RESUMED', { mode: 'retry_failed' });
-    void this.execute(runId).catch(() => undefined);
+    await this.withControlLock(runId, async () => {
+      await this.runsService.ensureRun(runId);
+      const { projected } = await this.loadProjection(runId);
+      if (projected.status !== 'failed') {
+        throw new ConflictException('仅失败的运行可从断点重试');
+      }
+      await this.appendEvent(runId, 'RUN_RESUMED', { mode: 'retry_failed' });
+      void this.execute(runId).catch(() => undefined);
+    });
   }
 
   /** Human 审批：批准则恢复执行；拒绝则直接落 NODE_FAILED + RUN_FAILED（不重入引擎） */
   async submitHumanInput(runId: string, request: HumanInputRequest): Promise<void> {
-    await this.runsService.ensureRun(runId);
-    const { projected, events } = await this.loadProjection(runId);
-    if (projected.status !== 'waiting_human' || projected.waitingHumanNodeId === null) {
-      throw new ConflictException('运行不在等待人工输入状态');
-    }
-    const nodeId = projected.waitingHumanNodeId;
-    await this.appendEvent(runId, 'HUMAN_INPUT_RECEIVED', {
-      nodeId,
-      approved: request.approved === true,
-      input: request.input ?? null,
-    });
-    if (!request.approved) {
+    await this.withControlLock(runId, async () => {
+      await this.runsService.ensureRun(runId);
+      const { projected, events } = await this.loadProjection(runId);
+      if (projected.status !== 'waiting_human' || projected.waitingHumanNodeId === null) {
+        throw new ConflictException('运行不在等待人工输入状态');
+      }
+      const nodeId = projected.waitingHumanNodeId;
+      await this.appendEvent(runId, 'HUMAN_INPUT_RECEIVED', {
+        nodeId,
+        approved: request.approved === true,
+        input: request.input ?? null,
+      });
+      if (!request.approved) {
+        const nodeType = this.humanWaitingNodeType(events, nodeId);
+        await this.appendEvent(runId, 'NODE_FAILED', { nodeId, nodeType, error: '审批被拒绝' });
+        await this.terminate(runId, 'RUN_FAILED', { error: `节点 ${nodeId} 失败: 审批被拒绝` });
+        return;
+      }
+      await this.appendEvent(runId, 'RUN_RESUMED', { mode: 'human' });
+      // 补发 human 节点成功事件：挂起已由 HUMAN_INPUT_RECEIVED 解决，
+      // 缺少 NODE_SUCCEEDED 会让投影永远停留在 running（且后续回放丢失该节点输出）
       const nodeType = this.humanWaitingNodeType(events, nodeId);
-      await this.appendEvent(runId, 'NODE_FAILED', { nodeId, nodeType, error: '审批被拒绝' });
-      await this.appendEvent(runId, 'RUN_FAILED', { error: `节点 ${nodeId} 失败: 审批被拒绝` });
-      await this.runsService.syncFromProjection(runId);
-      return;
-    }
-    await this.appendEvent(runId, 'RUN_RESUMED', { mode: 'human' });
-    void this.execute(runId).catch(() => undefined);
+      const okSeq = await this.appendEvent(runId, 'NODE_SUCCEEDED', {
+        nodeId,
+        nodeType,
+        output: truncateForEvent(request.input ?? null),
+      });
+      await this.appendEvent(runId, 'CHECKPOINT_SAVED', { seq: okSeq });
+      void this.execute(runId).catch(() => undefined);
+    });
   }
 
   private humanWaitingNodeType(events: WorkflowEvent[], nodeId: string): string {
@@ -474,11 +530,10 @@ export class EngineService {
     type: WorkflowEventType,
     payload: Record<string, unknown>,
   ): Promise<void> {
-    const seq = await this.eventStore.nextSeq(runId);
-    await this.eventStore.append(runId, seq, type, payload);
+    await this.eventStore.append(runId, type, payload);
   }
 
-  private async doExecute(runId: string): Promise<void> {
+  private async doExecute(runId: string, epoch: number): Promise<void> {
     const run = await this.prisma.workflowRun.findUnique({ where: { id: runId } });
     if (!run) {
       this.logger.error(`run ${runId} 不存在，调度终止`);
@@ -530,17 +585,11 @@ export class EngineService {
 
     const workset = rebuildSchedulingWorkset(definition, projected, { rearmFailedNodes });
 
-    let seq = await this.eventStore.nextSeq(runId);
-    // 序号在调用时同步分配（并行派发不重号），落库经队列串行（SSE 推送保序）
-    let appendQueue: Promise<void> = Promise.resolve();
-    const emit: EmitFn = (type, payload) => {
-      const eventSeq = seq;
-      seq += 1;
-      const next = appendQueue.then(async () => {
-        await this.eventStore.append(runId, eventSeq, type, payload);
-      });
-      appendQueue = next.catch(() => undefined);
-      return next;
+    // 事件写入走 EventStore 的 per-run 串行队列：seq 分配与落库原子完成，
+    // 与控制面（暂停/恢复/审批）的并发写入不会撞 (runId, seq) 唯一约束
+    const emit: EmitFn = async (type, payload) => {
+      const event = await this.eventStore.append(runId, type, payload);
+      return event.seq;
     };
 
     const services: NodeRuntimeServices = {
@@ -588,8 +637,8 @@ export class EngineService {
     const stopDispatching = (): boolean =>
       aborted ||
       humanSuspended ||
-      this.cancelRequested.has(runId) ||
-      this.pauseRequested.has(runId);
+      this.cancelRequested.get(runId) === epoch ||
+      this.pauseRequested.get(runId) === epoch;
 
     const ready = workset.ready;
     let cursor = 0;
@@ -613,21 +662,25 @@ export class EngineService {
       try {
         const result = await this.runWithResilience(
           node,
-          () => executorFactory(node.type)({ node, context, nextSeq: () => seq, emit }),
+          () => executorFactory(node.type)({ node, context, emit }),
           emit,
         );
 
         if (result.suspended) {
           humanSuspended = true;
-          await emit('RUN_SUSPENDED', { nodeId, reason: 'human' });
-          await emit('CHECKPOINT_SAVED', { seq: seq - 1 });
+          const suspendSeq = await emit('RUN_SUSPENDED', { nodeId, reason: 'human' });
+          await emit('CHECKPOINT_SAVED', { seq: suspendSeq });
           return;
         }
 
         nodeOutputs[nodeId] = { output: result.output };
         nodeOutputs['__last_upstream__'] = { output: result.output };
-        await emit('NODE_SUCCEEDED', { nodeId, nodeType: node.type, output: result.output });
-        await emit('CHECKPOINT_SAVED', { seq: seq - 1 });
+        const okSeq = await emit('NODE_SUCCEEDED', {
+          nodeId,
+          nodeType: node.type,
+          output: truncateForEvent(result.output),
+        });
+        await emit('CHECKPOINT_SAVED', { seq: okSeq });
 
         if (node.type === 'condition') {
           const selected = (result.output as { selected?: string } | null)?.selected;
@@ -639,11 +692,11 @@ export class EngineService {
               workset.indegree.set(edge.target, remaining);
               if (remaining === 0) ready.push(edge.target);
             } else {
-              await emit('NODE_SKIPPED', {
+              const skipSeq = await emit('NODE_SKIPPED', {
                 nodeId: edge.target,
                 nodeType: nodeById.get(edge.target)?.type ?? '',
               });
-              await emit('CHECKPOINT_SAVED', { seq: seq - 1 });
+              await emit('CHECKPOINT_SAVED', { seq: skipSeq });
               skipDownstream(edge.target);
             }
           }
@@ -654,9 +707,13 @@ export class EngineService {
       } catch (error) {
         aborted = true;
         const message = error instanceof Error ? error.message : String(error);
-        await emit('NODE_FAILED', { nodeId, nodeType: node.type, error: message });
-        await emit('CHECKPOINT_SAVED', { seq: seq - 1 });
-        await this.terminate(runId, 'RUN_FAILED', { error: `节点 ${nodeId} 失败: ${message}` });
+        try {
+          const failSeq = await emit('NODE_FAILED', { nodeId, nodeType: node.type, error: message });
+          await emit('CHECKPOINT_SAVED', { seq: failSeq });
+        } finally {
+          // terminate 幂等（终态屏障）：并行多节点同时失败也只落一条 RUN_FAILED
+          await this.terminate(runId, 'RUN_FAILED', { error: `节点 ${nodeId} 失败: ${message}` });
+        }
       }
     };
 
@@ -670,7 +727,7 @@ export class EngineService {
 
     // 主循环：并发执行就绪节点；暂停/取消在调度间隙生效
     while (cursor < ready.length || inflight.size > 0) {
-      if (this.pauseRequested.has(runId)) pauseSeen = true;
+      if (this.pauseRequested.get(runId) === epoch) pauseSeen = true;
       while (cursor < ready.length && !stopDispatching()) {
         const nodeId = ready[cursor];
         cursor += 1;
@@ -690,7 +747,7 @@ export class EngineService {
     await Promise.allSettled(inflight);
 
     // 收尾优先级：取消 > 暂停 > 失败 > Human 挂起 > 历史挂起锚点 > 完成
-    const wasCanceled = this.cancelRequested.has(runId);
+    const wasCanceled = this.cancelRequested.get(runId) === epoch;
     this.cancelRequested.delete(runId);
     this.pauseRequested.delete(runId);
 
@@ -760,7 +817,12 @@ export class EngineService {
     type: 'RUN_COMPLETED' | 'RUN_FAILED' | 'RUN_CANCELED' | 'RUN_SUSPENDED',
     payload: Record<string, unknown>,
   ): Promise<void> {
-    await this.appendEvent(runId, type, payload);
+    // 终态屏障：事件流已终态（RUN_COMPLETED/FAILED/CANCELED）时跳过追加，
+    // 保证终态事件由单一写者落库、至多一条（RUN_SUSPENDED 可多次，不在屏障内）
+    const appended = await this.eventStore.appendTerminal(runId, type, payload);
+    if (appended === null) {
+      this.logger.warn(`run ${runId} 已处于终态，忽略重复的 ${type} 事件`);
+    }
     await this.runsService.syncFromProjection(runId);
   }
 }

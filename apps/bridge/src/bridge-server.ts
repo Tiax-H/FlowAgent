@@ -53,6 +53,7 @@ function toOutcome(summary: RunSummary, note?: string): RunOutcome {
   return outcome;
 }
 
+/** 轮询用轻量状态：只查缓存列；终态/超时后才做一次完整 getRun 取输出 */
 async function pollUntilTerminal(
   api: FlowAgentApi,
   runId: string,
@@ -61,9 +62,9 @@ async function pollUntilTerminal(
 ): Promise<RunSummary> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const summary = await api.getRun(runId);
-    if (isTerminalRunStatus(summary.status)) return summary;
-    if (Date.now() >= deadline) return summary;
+    const status = await api.getRunStatus(runId);
+    if (isTerminalRunStatus(status.status)) return api.getRun(runId);
+    if (Date.now() >= deadline) return api.getRun(runId);
     await sleep(intervalMs);
   }
 }

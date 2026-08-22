@@ -34,14 +34,28 @@ export const NODE_DEFAULT_NAMES: Record<NodeType, string> = {
   transform: '数据映射',
 };
 
-/** WorkflowDefinition（契约）→ React Flow 节点/边 */
+/**
+ * WorkflowDefinition（契约）→ React Flow 节点/边。
+ * 节点级顶层字段（timeoutMs/retry）暂存进 data.__nodeExtras，
+ * 画布暂无编辑入口但不丢失：保存/导出时还原（见 flowToDefinition）。
+ */
 export function definitionToFlow(definition: WorkflowDefinition): { nodes: Node[]; edges: Edge[] } {
-  const nodes: Node[] = definition.nodes.map((node: WorkflowNode) => ({
-    id: node.id,
-    type: 'flowagent',
-    position: { x: node.position.x, y: node.position.y },
-    data: { nodeType: node.type, name: node.name, ...node.data },
-  }));
+  const nodes: Node[] = definition.nodes.map((node: WorkflowNode) => {
+    const extras: Record<string, unknown> = {};
+    if (node.timeoutMs !== undefined) extras.timeoutMs = node.timeoutMs;
+    if (node.retry !== undefined) extras.retry = node.retry;
+    return {
+      id: node.id,
+      type: 'flowagent',
+      position: { x: node.position.x, y: node.position.y },
+      data: {
+        nodeType: node.type,
+        name: node.name,
+        ...(Object.keys(extras).length > 0 ? { __nodeExtras: extras } : {}),
+        ...node.data,
+      },
+    };
+  });
   const edges: Edge[] = definition.edges.map((edge: WorkflowEdge) => ({
     id: edge.id,
     source: edge.source,
@@ -51,7 +65,7 @@ export function definitionToFlow(definition: WorkflowDefinition): { nodes: Node[
   return { nodes, edges };
 }
 
-/** React Flow 节点/边 → WorkflowDefinition（契约） */
+/** React Flow 节点/边 → WorkflowDefinition（契约）；__nodeExtras 还原为节点顶层字段 */
 export function flowToDefinition(
   nodes: Node[],
   edges: Edge[],
@@ -60,17 +74,26 @@ export function flowToDefinition(
   return {
     ...base,
     nodes: nodes.map((node) => {
-      const { nodeType, name, ...rest } = node.data as {
+      const {
+        nodeType,
+        name,
+        __nodeExtras,
+        ...rest
+      } = node.data as {
         nodeType: NodeType;
         name: string;
+        __nodeExtras?: { timeoutMs?: number; retry?: WorkflowNode['retry'] };
       } & Record<string, unknown>;
-      return {
+      const workflowNode: WorkflowNode = {
         id: node.id,
         type: nodeType,
         name,
         position: { x: Math.round(node.position.x), y: Math.round(node.position.y) },
         data: rest,
       };
+      if (__nodeExtras?.timeoutMs !== undefined) workflowNode.timeoutMs = __nodeExtras.timeoutMs;
+      if (__nodeExtras?.retry !== undefined) workflowNode.retry = __nodeExtras.retry;
+      return workflowNode;
     }),
     edges: edges.map((edge) => {
       const workflowEdge: WorkflowEdge = { id: edge.id, source: edge.source, target: edge.target };

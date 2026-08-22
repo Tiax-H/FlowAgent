@@ -35,7 +35,7 @@ describe('主动暂停与取消', () => {
     );
     const eventStore = new MemoryEventStore();
     const engine = makeEngine(eventStore, definition);
-    engineFlags(engine).pauseRequested.add('run_1');
+    engineFlags(engine).pauseRequested.set('run_1', 1);
 
     await engine.execute('run_1');
 
@@ -61,7 +61,7 @@ describe('主动暂停与取消', () => {
     );
     const eventStore = new MemoryEventStore();
     const engine = makeEngine(eventStore, definition);
-    engineFlags(engine).pauseRequested.add('run_1');
+    engineFlags(engine).pauseRequested.set('run_1', 1);
     await engine.execute('run_1');
 
     await engine.resume('run_1');

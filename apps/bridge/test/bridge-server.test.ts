@@ -26,7 +26,7 @@ function makeSummary(runId: string, status: string): RunSummary {
   };
 }
 
-/** 内存 API：nextStatuses 依次决定每次 getRun 的状态推进 */
+/** 内存 API：nextStatuses 依次决定每次轮询（getRunStatus）的状态推进 */
 class FakeApi implements FlowAgentApi {
   workflows: WorkflowListItem[] = [];
   runs = new Map<string, RunSummary>();
@@ -45,9 +45,12 @@ class FakeApi implements FlowAgentApi {
     return runId;
   }
   async getRun(runId: string): Promise<RunSummary> {
+    return this.runs.get(runId) ?? makeSummary(runId, 'running');
+  }
+  async getRunStatus(runId: string): Promise<{ id: string; status: string }> {
     const status = this.nextStatuses.shift();
     if (status !== undefined) this.runs.set(runId, makeSummary(runId, status));
-    return this.runs.get(runId) ?? makeSummary(runId, 'running');
+    return { id: runId, status: this.runs.get(runId)?.status ?? 'running' };
   }
 }
 
@@ -129,7 +132,7 @@ describe('bridge-server', () => {
   it('flowagent_get_run 查询指定 run', async () => {
     const api = new FakeApi();
     const runId = await api.startRun('wf1', null);
-    api.nextStatuses = ['failed'];
+    api.runs.set(runId, makeSummary(runId, 'failed'));
     const client = await connect(api);
     const outcome = await callJson(client, 'flowagent_get_run', { runId });
     expect(outcome.status).toBe('failed');

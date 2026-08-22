@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { projectRunState } from '../src/engine/projection';
 import { MemoryEventStore, linearDefinition, makeEngine, node } from './engine-harness';
@@ -94,10 +94,14 @@ describe('EngineService 调度器', () => {
   });
 
   it('节点失败 → RUN_FAILED，其余节点不再调度', async () => {
+    // 用 LLM 拒答模拟运行时失败（空模板 transform 现在在校验层即被拒，属快速失败）
+    const chatCompletion = vi
+      .fn<() => Promise<{ content: string }>>()
+      .mockRejectedValue(new Error('上游 500'));
     const definition = linearDefinition(
       [
         node('start', 'start'),
-        node('boom', 'transform', {}),
+        node('boom', 'llm', { provider: 'p', model: 'm', prompt: 'hi' }),
         node('after', 'transform', { template: { x: 1 } }),
         node('end', 'end'),
       ],
@@ -109,7 +113,9 @@ describe('EngineService 调度器', () => {
     );
 
     const eventStore = new MemoryEventStore();
-    const engine = makeEngine(eventStore, definition);
+    const engine = makeEngine(eventStore, definition, {
+      llm: { chatCompletion: chatCompletion as never },
+    });
     await engine.execute('run_1');
 
     const state = projectRunState('run_1', await eventStore.readEvents('run_1'));

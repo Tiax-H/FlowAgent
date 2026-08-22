@@ -66,7 +66,6 @@ describe('Agent ReAct 执行器', () => {
         tools: [{ server: 'search', tool: 'web_search' }],
       }),
       context: { input: {}, variables: {}, nodeOutputs: {} },
-      nextSeq: () => 0,
       emit,
     });
 
@@ -100,7 +99,6 @@ describe('Agent ReAct 执行器', () => {
     const result = await executor({
       node: agentNode({ provider: 'test', model: 'fake', prompt: '你好' }),
       context: { input: {}, variables: {}, nodeOutputs: {} },
-      nextSeq: () => 0,
       emit,
     });
 
@@ -144,7 +142,6 @@ describe('Agent ReAct 执行器', () => {
     const result = await executor({
       node: agentNode({ provider: 'test', model: 'fake', prompt: 'x', maxIterations: 3 }),
       context: { input: {}, variables: {}, nodeOutputs: {} },
-      nextSeq: () => 0,
       emit,
     });
 

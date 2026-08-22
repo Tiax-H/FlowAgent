@@ -55,6 +55,7 @@ function EditorCanvas({ workflowId, onBack, onRun }: EditorProps) {
         createFlowNode('end', { x: 640, y: 200 }),
       ]);
       setEdges([]);
+      savedSnapshotRef.current = '';
       return;
     }
     void workflowsApi
@@ -66,6 +67,14 @@ function EditorCanvas({ workflowId, onBack, onRun }: EditorProps) {
           const flow = definitionToFlow(loaded.definition);
           setNodes(flow.nodes);
           setEdges(flow.edges);
+          savedSnapshotRef.current = JSON.stringify(
+            flowToDefinition(flow.nodes, flow.edges, {
+              schemaVersion: 1,
+              name: loaded.name,
+              nodes: [],
+              edges: [],
+            }),
+          );
         }
       })
       .catch((cause: unknown) =>
@@ -143,14 +152,32 @@ function EditorCanvas({ workflowId, onBack, onRun }: EditorProps) {
     [nodes, edges, name],
   );
 
-  async function handleSave() {
+  /** 最近一次落盘（加载或保存）的定义快照，用于 dirty 判断 */
+  const savedSnapshotRef = useRef<string>('');
+  const definitionJson = useMemo(() => JSON.stringify(definition), [definition]);
+  const dirty = definitionJson !== savedSnapshotRef.current;
+
+  useEffect(() => {
+    const guard = (event: BeforeUnloadEvent): void => {
+      if (!dirty) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', guard);
+    return () => window.removeEventListener('beforeunload', guard);
+  }, [dirty]);
+
+  const confirmLeave = (): boolean => !dirty || window.confirm('有未保存的修改，确定离开？');
+
+  /** 保存：返回保存后的记录（含 id/version）；校验或请求失败返回 null */
+  async function handleSave(): Promise<WorkflowRecord | null> {
     setBusy(true);
     setSaved(null);
     const result = validateWorkflowDefinition(definition);
     if (!result.valid) {
       setErrors(result.errors);
       setBusy(false);
-      return;
+      return null;
     }
     setErrors([]);
     try {
@@ -160,8 +187,11 @@ function EditorCanvas({ workflowId, onBack, onRun }: EditorProps) {
         : await workflowsApi.create(body);
       setRecord(savedRecord);
       setSaved(`已保存 v${savedRecord.version}`);
+      savedSnapshotRef.current = definitionJson;
+      return savedRecord;
     } catch (cause) {
       setErrors([cause instanceof Error ? cause.message : String(cause)]);
+      return null;
     } finally {
       setBusy(false);
     }
@@ -183,6 +213,14 @@ function EditorCanvas({ workflowId, onBack, onRun }: EditorProps) {
         const flow = definitionToFlow(result.value.definition);
         setNodes(flow.nodes);
         setEdges(flow.edges);
+        savedSnapshotRef.current = JSON.stringify(
+          flowToDefinition(flow.nodes, flow.edges, {
+            schemaVersion: 1,
+            name: result.value.name,
+            nodes: [],
+            edges: [],
+          }),
+        );
       })
       .catch((cause: unknown) =>
         setErrors([cause instanceof Error ? cause.message : String(cause)]),
@@ -207,10 +245,12 @@ function EditorCanvas({ workflowId, onBack, onRun }: EditorProps) {
       <header className="flex items-center gap-3 border-b border-neutral-200 bg-white px-4 py-2">
         <button
           type="button"
-          onClick={onBack}
+          onClick={() => {
+            if (confirmLeave()) onBack();
+          }}
           className="rounded px-2 py-1 text-sm text-neutral-600 hover:bg-neutral-100"
         >
-          ← 返回
+          ← 返回{dirty ? ' •' : ''}
         </button>
         <input
           value={name}
@@ -253,17 +293,20 @@ function EditorCanvas({ workflowId, onBack, onRun }: EditorProps) {
         </button>
         <button
           type="button"
-          disabled={busy || !record}
-          title={record ? '先保存再运行' : '先保存工作流'}
+          disabled={busy}
+          title={record ? '校验并保存后运行' : '先保存工作流再运行'}
           onClick={async () => {
-            await handleSave();
-            onRun(record?.id ?? workflowId);
+            // 校验或保存失败必须中断：绝不能拿着旧版本发起运行误导用户
+            const saved = await handleSave();
+            if (!saved) return;
+            onRun(saved.id);
           }}
           className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white disabled:opacity-40"
         >
           ▶ 运行
         </button>
-        {saved && <span className="text-xs text-green-600">{saved}</span>}
+        {saved && !dirty && <span className="text-xs text-green-600">{saved}</span>}
+        {saved && dirty && <span className="text-xs text-neutral-400">有未保存修改</span>}
       </header>
       {errors.length > 0 && (
         <div className="border-b border-red-100 bg-red-50 px-4 py-2">

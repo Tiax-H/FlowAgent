@@ -17,6 +17,8 @@ export interface FlowAgentApi {
   /** 启动一次运行，返回持久句柄 runId */
   startRun(workflowId: string, input: unknown): Promise<string>;
   getRun(runId: string): Promise<RunSummary>;
+  /** 轻量状态查询（轮询用）：只读缓存列，不回放事件流 */
+  getRunStatus(runId: string): Promise<{ id: string; status: string }>;
 }
 
 const TERMINAL_RUN_STATUSES = ['completed', 'failed', 'canceled'] as const;
@@ -52,6 +54,10 @@ export class FlowAgentClient implements FlowAgentApi {
 
   async getRun(runId: string): Promise<RunSummary> {
     return this.request<RunSummary>(`/api/runs/${runId}`);
+  }
+
+  async getRunStatus(runId: string): Promise<{ id: string; status: string }> {
+    return this.request<{ id: string; status: string }>(`/api/runs/${runId}/status`);
   }
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {

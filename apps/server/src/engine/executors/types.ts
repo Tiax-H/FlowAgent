@@ -11,9 +11,8 @@ import type { TemplateContext } from '../template';
 export interface NodeExecutionInput {
   node: WorkflowNode;
   context: TemplateContext;
-  /** 已有事件序号计数器的引用，emit 前自增 */
-  nextSeq: () => number;
-  emit: (type: WorkflowEventType, payload: Record<string, unknown>) => Promise<void>;
+  /** 事件发射：在 run 串行队列内原子落库，返回实际事件序号 */
+  emit: (type: WorkflowEventType, payload: Record<string, unknown>) => Promise<number>;
 }
 
 export interface NodeExecutionResult {

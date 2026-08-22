@@ -49,3 +49,19 @@ describe('runJavascript', () => {
     expect(result.timedOut).toBe(true);
   });
 });
+
+describe('sandbox 并发限额（2026-08-22 复审新增）', () => {
+  it('超过并发上限的调用立即返回明确错误而非无限排队', async () => {
+    const slow = 'await new Promise((resolve) => setTimeout(resolve, 400)); "done"';
+    // 前两个占满并发额度，第三个应被拒
+    const [first, second, third] = await Promise.all([
+      runJavascript(slow, 3000),
+      runJavascript(slow, 3000),
+      runJavascript(slow, 3000),
+    ]);
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    expect(third.ok).toBe(false);
+    expect(third.stderr).toContain('并发超限');
+  });
+});

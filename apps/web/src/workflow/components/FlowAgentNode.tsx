@@ -42,18 +42,18 @@ export function FlowAgentNode({ data, selected }: NodeProps<Node<FlowAgentNodeDa
       )}
       {data.nodeType !== 'end' &&
         (branches.length > 0 ? (
-          <div className="mt-1 flex flex-col gap-1">
-            {branches.map((branch) => (
-              <Handle
-                key={branch.id}
-                id={branch.id}
-                type="source"
-                position={Position.Right}
-                className="!h-2.5 !w-2.5 !bg-orange-400"
-                style={{ top: undefined }}
-              />
-            ))}
-          </div>
+          // 每个分支一个 source handle：按分支行等分节点高度定位，
+          // 避免多个 handle 全部叠在节点右缘垂直中点、连线无法分辨
+          branches.map((branch, index) => (
+            <Handle
+              key={branch.id}
+              id={branch.id}
+              type="source"
+              position={Position.Right}
+              className="!h-2.5 !w-2.5 !bg-orange-400"
+              style={{ top: `${((index + 1) / (branches.length + 1)) * 100}%` }}
+            />
+          ))
         ) : (
           <Handle
             type="source"

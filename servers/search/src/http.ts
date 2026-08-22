@@ -80,7 +80,7 @@ export function startHttpServer(port: number): void {
     });
   });
 
-  httpServer.listen(port, () => {
+  httpServer.listen(port, '127.0.0.1', () => {
     console.log(`flowagent-search HTTP MCP Server 监听 http://localhost:${port}/mcp（会话数: ${sessions.size}）`);
   });
 }

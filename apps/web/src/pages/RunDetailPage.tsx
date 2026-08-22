@@ -33,6 +33,18 @@ const NODE_STATUS_STYLES: Record<string, string> = {
   suspended: 'bg-pink-100 text-pink-700',
 };
 
+const NODE_STATUS_LABELS: Record<string, string> = {
+  idle: '未开始',
+  running: '执行中',
+  succeeded: '成功',
+  failed: '失败',
+  skipped: '已跳过',
+  suspended: '挂起',
+};
+
+/** 时间轴最多渲染最近多少条事件（超出提示总数，避免长 run 冻结 DOM） */
+const MAX_VISIBLE_EVENTS = 500;
+
 const EVENT_TYPE_COLORS: Record<string, string> = {
   RUN_STARTED: 'text-blue-600',
   RUN_COMPLETED: 'text-green-600',
@@ -97,18 +109,23 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
   const [replayCursor, setReplayCursor] = useState<number | null>(null);
   const [playing, setPlaying] = useState(false);
   const [streamEpoch, setStreamEpoch] = useState(0);
+  const [streamConnected, setStreamConnected] = useState(true);
   const timelineRef = useRef<HTMLDivElement>(null);
   const eventsRef = useRef<WorkflowEvent[]>([]);
+  /** 事件摘要缓存（按 seq）：大 payload 的 stringify 只在事件到达时做一次 */
+  const summaryCacheRef = useRef<Map<number, string>>(new Map());
 
   const isTerminal = summary !== null && TERMINAL_STATUSES.includes(summary.status);
   const replayActive = isTerminal && replayCursor !== null;
 
-  // 初始加载 + SSE 实时流（控制动作后经 streamEpoch 重订，覆盖 resume 后的新事件）
+  // 初始加载 + SSE 实时流（控制动作后经 streamEpoch 重订；断线交给浏览器自动重连，
+  // 服务端按 Last-Event-ID 从断点续传，不重放全量）
   useEffect(() => {
     let source: EventSource | null = null;
     let disposed = false;
 
     eventsRef.current = [];
+    summaryCacheRef.current = new Map();
     setEvents([]);
 
     void runsApi
@@ -119,32 +136,45 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
       });
 
     source = new EventSource(`/api/runs/${runId}/stream`);
+    source.onopen = () => setStreamConnected(true);
+    let errorSummaryFetched = false;
     source.addEventListener('event', (message) => {
       if (disposed) return;
       const event = JSON.parse((message as MessageEvent).data) as WorkflowEvent;
+      // 按 seq 去重（重连后服务端续传可能短窗重复）
+      if (eventsRef.current.some((existing) => existing.seq === event.seq)) return;
       eventsRef.current = [...eventsRef.current, event];
+      summaryCacheRef.current.set(event.seq, eventSummary(event));
       setEvents(eventsRef.current);
     });
     source.addEventListener('done', () => {
       source?.close();
+      setStreamConnected(false);
       void runsApi
         .get(runId)
         .then(setSummary)
         .catch(() => undefined);
     });
     source.onerror = () => {
-      // 后端不可达或流结束；轮询兜底一次最终状态
-      source?.close();
-      void runsApi
-        .get(runId)
-        .then(setSummary)
-        .catch(() => undefined);
+      // 不 close：EventSource 自动指数退避重连并携带 Last-Event-ID 续传；
+      // 仅在 run 已终态（流已被 done 关闭）时静默
+      if (summary && TERMINAL_STATUSES.includes(summary.status)) return;
+      setStreamConnected(false);
+      // 自动重连期间 onerror 会反复触发：兜底 summary 只拉一次，重连成功靠 onopen 恢复
+      if (!errorSummaryFetched) {
+        errorSummaryFetched = true;
+        void runsApi
+          .get(runId)
+          .then(setSummary)
+          .catch(() => undefined);
+      }
     };
 
     return () => {
       disposed = true;
       source?.close();
     };
+    // summary 仅用于终态判断（onerror 静默），不作为重订触发器
   }, [runId, streamEpoch]);
 
   // 自动滚动到底部（仅实时模式）
@@ -165,11 +195,12 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
     return () => clearTimeout(timer);
   }, [playing, replayCursor, events.length]);
 
-  const runAction = (action: () => Promise<unknown>): void => {
+  const runAction = (action: () => Promise<unknown>, onSuccess?: () => void): void => {
     setBusy(true);
     setActionError(null);
     action()
       .then(() => {
+        onSuccess?.();
         void runsApi
           .get(runId)
           .then(setSummary)
@@ -178,6 +209,7 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
           .events(runId)
           .then((fresh) => {
             eventsRef.current = fresh;
+            summaryCacheRef.current = new Map(fresh.map((event) => [event.seq, eventSummary(event)]));
             setEvents(fresh);
           })
           .catch(() => undefined);
@@ -190,10 +222,14 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
   };
 
   const submitHuman = (approved: boolean): void => {
-    runAction(() =>
-      runsApi.humanInput(runId, { approved, input: parseHumanInputText(humanInputText) }),
+    if (!approved && !window.confirm('拒绝将使本次运行直接失败（不可恢复），确定拒绝？')) {
+      return;
+    }
+    runAction(
+      () => runsApi.humanInput(runId, { approved, input: parseHumanInputText(humanInputText) }),
+      // 成功后才清空输入：失败时保留用户写的审批意见
+      () => setHumanInputText(''),
     );
-    setHumanInputText('');
   };
 
   // 回放模式下节点看板取折叠状态；节点名沿用 summary 元数据
@@ -236,8 +272,8 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
         )}
         {summary && <span className="text-xs text-neutral-400">v{summary.workflowVersion}</span>}
 
-        {/* 操作栏：按运行状态条件渲染 */}
-        {summary && !TERMINAL_STATUSES.includes(summary.status) && (
+        {/* 操作栏：failed 仍提供断点重试；其余非终态提供取消/暂停/恢复 */}
+        {summary && (summary.status === 'failed' || !TERMINAL_STATUSES.includes(summary.status)) && (
           <div className="ml-auto flex items-center gap-2">
             {summary.status === 'running' && (
               <button
@@ -269,21 +305,32 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
                 从断点重试
               </button>
             )}
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => runAction(() => runsApi.cancel(runId))}
-              className="rounded border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-600 hover:bg-neutral-100 disabled:opacity-50"
-            >
-              取消
-            </button>
+            {summary.status !== 'failed' && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => runAction(() => runsApi.cancel(runId))}
+                className="rounded border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-600 hover:bg-neutral-100 disabled:opacity-50"
+              >
+                取消
+              </button>
+            )}
           </div>
         )}
-        {isTerminal && (
+        {isTerminal && summary.status !== 'failed' && (
           <button
             type="button"
             onClick={replayToggle}
             className="ml-auto rounded border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-600 hover:bg-neutral-100"
+          >
+            {replayActive ? '退出回放' : '回放时间轴'}
+          </button>
+        )}
+        {isTerminal && summary.status === 'failed' && (
+          <button
+            type="button"
+            onClick={replayToggle}
+            className="ml-2 rounded border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-600 hover:bg-neutral-100"
           >
             {replayActive ? '退出回放' : '回放时间轴'}
           </button>
@@ -332,6 +379,11 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
 
       {error && <p className="bg-red-50 px-4 py-2 text-sm text-red-600">{error}</p>}
       {actionError && <p className="bg-orange-50 px-4 py-2 text-sm text-orange-600">{actionError}</p>}
+      {!streamConnected && !isTerminal && (
+        <p className="bg-yellow-50 px-4 py-2 text-xs text-yellow-700">
+          实时连接已断开，正在自动重连（服务恢复后会从断点继续接收事件）…
+        </p>
+      )}
 
       {/* 回放控件 */}
       {replayActive && (
@@ -395,7 +447,7 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
                     <span
                       className={`ml-auto shrink-0 rounded px-1.5 py-0.5 text-[10px] ${NODE_STATUS_STYLES[node.status] ?? NODE_STATUS_STYLES.idle}`}
                     >
-                      {node.status}
+                      {NODE_STATUS_LABELS[node.status] ?? node.status}
                     </span>
                   </div>
                   <code className="block truncate text-[10px] text-neutral-400">{node.nodeId}</code>
@@ -406,13 +458,14 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
           )}
         </aside>
 
-        {/* 事件时间轴（回放时游标之后的事件淡化） */}
+        {/* 事件时间轴（回放时游标之后的事件淡化；超长时只渲染最近 N 条） */}
         <div ref={timelineRef} className="min-w-0 flex-1 overflow-auto bg-neutral-50 p-4">
           <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">
-            事件时间轴（{events.length}）
+            事件时间轴（{events.length}
+            {events.length > MAX_VISIBLE_EVENTS ? `，仅显示最近 ${MAX_VISIBLE_EVENTS} 条` : ''}）
           </h2>
           <ol className="space-y-1">
-            {events.map((event) => {
+            {events.slice(-MAX_VISIBLE_EVENTS).map((event) => {
               const dimmed = replayActive && event.seq > (replayCursor ?? 0);
               return (
                 <li
@@ -428,7 +481,7 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
                     {event.type}
                   </span>
                   <span className="min-w-0 flex-1 truncate text-neutral-600">
-                    {eventSummary(event)}
+                    {summaryCacheRef.current.get(event.seq) ?? eventSummary(event)}
                   </span>
                   <span className="shrink-0 font-mono text-[10px] text-neutral-300">
                     {new Date(event.timestamp).toLocaleTimeString('zh-CN')}

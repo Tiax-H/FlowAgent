@@ -74,6 +74,16 @@ export class McpRegistryService implements OnModuleDestroy {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn(`MCP Server "${server.name}" 连接失败: ${message}`);
+      // 回滚：connect 成功但 discovery 失败时，摘除池内连接并关闭子进程，
+      // 避免僵尸连接（DB 状态 error 但 callTool 仍按池路由）与 stdio 进程泄漏
+      const managed = this.connections.get(serverId);
+      if (managed) {
+        this.connections.delete(serverId);
+        managed.cleanup();
+        await managed.handle.close().catch((closeError: unknown) => {
+          this.logger.warn(`回滚关闭连接失败 (server=${serverId}): ${String(closeError)}`);
+        });
+      }
       await this.prisma.mcpServer.update({
         where: { id: serverId },
         data: { status: 'error', statusMessage: message },

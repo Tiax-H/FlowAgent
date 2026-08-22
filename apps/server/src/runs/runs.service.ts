@@ -64,11 +64,12 @@ export class RunsService implements OnModuleInit {
         status: 'pending',
       },
     });
-    await this.eventStore.append(run.id, 1, 'RUN_STARTED', {
+    await this.eventStore.append(run.id, 'RUN_STARTED', {
       workflowId,
       workflowVersion: workflow.version,
       input: input ?? null,
     });
+    await this.syncFromProjection(run.id).catch(() => undefined);
 
     if (this.runStarter) {
       void this.runStarter(run.id).catch(() => undefined);
@@ -76,25 +77,31 @@ export class RunsService implements OnModuleInit {
     return run.id;
   }
 
+  /**
+   * 运行列表：直接读 workflow_runs 投影缓存列（syncFromProjection 维护）。
+   * 列表页每 3 秒轮询，绝不能逐 run 全量回放事件（那是 O(runs × events) 的放大器）；
+   * 节点级明细留给详情页（getRun）。缓存列在运行中由控制面动作刷新，
+   * 状态变化粒度（running→终态）对本页足够。
+   */
   async listRuns(workflowId?: string): Promise<RunSummary[]> {
     const rows = await this.prisma.workflowRun.findMany({
       where: workflowId ? { workflowId } : undefined,
       orderBy: { createdAt: 'desc' },
       take: 100,
     });
-    const workflowNames = new Map<string, string>();
-    for (const row of rows) {
-      if (!workflowNames.has(row.workflowId)) {
-        const workflow = await this.prisma.workflow.findUnique({
-          where: { id: row.workflowId },
-          select: { name: true },
-        });
-        workflowNames.set(row.workflowId, workflow?.name ?? '(已删除)');
-      }
-    }
-    return Promise.all(
-      rows.map((row) => this.toSummary(row, workflowNames.get(row.workflowId) ?? '(已删除)')),
-    );
+    const workflowIds = [...new Set(rows.map((row) => row.workflowId))];
+    const workflows = await this.prisma.workflow.findMany({
+      where: { id: { in: workflowIds } },
+      select: { id: true, name: true },
+    });
+    const names = new Map(workflows.map((workflow) => [workflow.id, workflow.name]));
+    return rows.map((row) => this.toCachedSummary(row, names.get(row.workflowId) ?? '(已删除)'));
+  }
+
+  /** 轻量状态查询（bridge 轮询用）：只读缓存列，零事件回放 */
+  async getRunStatus(runId: string): Promise<{ id: string; status: string }> {
+    const row = await this.ensureRun(runId);
+    return { id: row.id, status: row.status };
   }
 
   async getRun(runId: string): Promise<RunSummary> {
@@ -118,19 +125,19 @@ export class RunsService implements OnModuleInit {
     return row;
   }
 
-  /** 用事件投影刷新 run 的缓存字段（引擎在终止事件后调用） */
-  async syncFromProjection(runId: string): Promise<void> {
-    const events = await this.eventStore.readEvents(runId);
-    const state = projectRunState(runId, events);
+  /** 用事件投影刷新 run 的缓存字段（引擎在终止事件后调用）；可传入已算好的投影省一次回放 */
+  async syncFromProjection(runId: string, state?: ReturnType<typeof projectRunState>): Promise<void> {
+    const projected =
+      state ?? projectRunState(runId, await this.eventStore.readEvents(runId));
     await this.prisma.workflowRun
       .update({
         where: { id: runId },
         data: {
-          status: state.status,
-          output: JSON.stringify(state.output ?? null),
-          error: state.error,
-          startedAt: state.startedAt ? new Date(state.startedAt) : null,
-          endedAt: state.endedAt ? new Date(state.endedAt) : null,
+          status: projected.status,
+          output: JSON.stringify(projected.output ?? null),
+          error: projected.error,
+          startedAt: projected.startedAt ? new Date(projected.startedAt) : null,
+          endedAt: projected.endedAt ? new Date(projected.endedAt) : null,
         },
       })
       .catch(() => undefined);
@@ -147,12 +154,28 @@ export class RunsService implements OnModuleInit {
       const state = projectRunState(orphan.id, events);
       if (state.status === 'pending' || state.status === 'running') {
         // append-only 安全：waiting_human 被 fold 守卫保护，终态投影仅重同步不追加
-        await this.eventStore.append(orphan.id, state.lastSeq + 1, 'RUN_SUSPENDED', {
-          reason: 'crash',
-        });
+        await this.eventStore.append(orphan.id, 'RUN_SUSPENDED', { reason: 'crash' });
       }
-      await this.syncFromProjection(orphan.id);
+      await this.syncFromProjection(orphan.id, state);
     }
+  }
+
+  /** 纯缓存列摘要（列表页）：nodes 为空，节点明细见 getRun */
+  private toCachedSummary(row: RunRow, workflowName: string): RunSummary {
+    return {
+      id: row.id,
+      workflowId: row.workflowId,
+      workflowName,
+      workflowVersion: row.workflowVersion,
+      status: row.status,
+      input: parseJson<unknown>(row.input, null),
+      output: parseJson<unknown>(row.output, null),
+      error: row.error,
+      nodes: [],
+      startedAt: row.startedAt ? row.startedAt.toISOString() : null,
+      endedAt: row.endedAt ? row.endedAt.toISOString() : null,
+      waitingHuman: null,
+    };
   }
 
   private async toSummary(row: RunRow, workflowName: string): Promise<RunSummary> {
@@ -210,24 +233,28 @@ export class RunsService implements OnModuleInit {
     };
   }
 
-  /** 节点元信息（type/name）缓存加载 */
-  private nodeMetaCache = new Map<string, Array<{ id: string; type: string; name: string }>>();
+  /** 节点元信息（type/name）缓存加载；按工作流 version 失效，编辑保存后自动刷新 */
+  private nodeMetaCache = new Map<
+    string,
+    { version: number; metas: Array<{ id: string; type: string; name: string }> }
+  >();
 
   private async loadNodeMetas(
     workflowId: string,
   ): Promise<Map<string, { id: string; type: string; name: string }>> {
-    let metas = this.nodeMetaCache.get(workflowId);
-    if (!metas) {
-      const workflow = await this.prisma.workflow.findUnique({
-        where: { id: workflowId },
-        select: { definition: true },
-      });
-      const definition = parseJson<{
-        nodes?: Array<{ id: string; type: string; name: string }>;
-      } | null>(workflow?.definition ?? null, null);
-      metas = definition?.nodes ?? [];
-      this.nodeMetaCache.set(workflowId, metas);
+    const workflow = await this.prisma.workflow.findUnique({
+      where: { id: workflowId },
+      select: { definition: true, version: true },
+    });
+    const cached = this.nodeMetaCache.get(workflowId);
+    if (cached && cached.version === workflow?.version) {
+      return new Map(cached.metas.map((meta) => [meta.id, meta] as const));
     }
+    const definition = parseJson<{
+      nodes?: Array<{ id: string; type: string; name: string }>;
+    } | null>(workflow?.definition ?? null, null);
+    const metas = definition?.nodes ?? [];
+    if (workflow) this.nodeMetaCache.set(workflowId, { version: workflow.version, metas });
     return new Map(metas.map((meta) => [meta.id, meta] as const));
   }
 }

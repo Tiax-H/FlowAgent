@@ -76,7 +76,7 @@ export function startHttpServer(createBridge: () => Promise<McpServer>, port: nu
       }
     });
   });
-  httpServer.listen(port, () => {
+  httpServer.listen(port, '127.0.0.1', () => {
     console.log(`flowagent-bridge HTTP MCP Server 监听 http://localhost:${port}/mcp`);
   });
 }

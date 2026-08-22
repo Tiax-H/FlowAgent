@@ -38,7 +38,10 @@ export function RunsPage({ onOpenRun }: { onOpenRun: (runId: string) => void }) 
 
   useEffect(() => {
     void refresh();
-    const timer = setInterval(() => void refresh(), 3000);
+    const timer = setInterval(() => {
+      // 后台标签页不轮询，避免对列表接口的无谓压力
+      if (document.visibilityState === 'visible') void refresh();
+    }, 3000);
     return () => clearInterval(timer);
   }, [refresh]);
 

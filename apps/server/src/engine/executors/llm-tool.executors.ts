@@ -1,6 +1,7 @@
 /** LLM / Tool 节点执行器 */
 import type { LlmNodeData, ToolNodeData } from '@flowagent/shared';
 
+import { truncateForEvent } from '../payload';
 import { renderDeep } from '../template';
 import type { NodeExecutionResult, NodeExecutor, NodeRuntimeServices } from './types';
 
@@ -22,12 +23,15 @@ export function createLlmExecutor(services: NodeRuntimeServices): NodeExecutor {
     const result = await services.llm.chatCompletion(data.provider, data.model, {
       messages: [{ role: 'user', content: String(renderedPrompt) }],
       temperature: data.temperature,
+      // 节点超时透传给 Adapter：超时真正中止底层请求，而不是留下僵尸调用
+      timeoutMs:
+        typeof node.timeoutMs === 'number' && node.timeoutMs > 0 ? node.timeoutMs : undefined,
     });
 
     await emit('LLM_COMPLETED', {
       nodeId: node.id,
       nodeType: node.type,
-      content: result.content ?? '',
+      content: truncateForEvent(result.content ?? ''),
       usage: result.usage,
     });
 
@@ -64,7 +68,7 @@ export function createToolExecutor(services: NodeRuntimeServices): NodeExecutor 
       server: data.server,
       tool: data.tool,
       ok: result.ok,
-      result: result.result,
+      result: truncateForEvent(result.result),
     });
 
     if (!result.ok) {

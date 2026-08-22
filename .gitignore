@@ -22,6 +22,7 @@ out/
 *.sqlite
 *.sqlite3
 apps/server/prisma/*.db
+apps/server/prisma/data/
 
 # Logs
 logs/

@@ -8,15 +8,76 @@ import { PrismaService } from '../src/prisma/prisma.service';
 import { RunsService } from '../src/runs/runs.service';
 import { EventStore } from '../src/engine/event-store.service';
 
+/**
+ * 内存 EventStore：与真实现的并发契约一致——
+ * per-run 串行队列内原子分配 seq（等价 SQLite 的 (runId,seq) 唯一约束 + nextSeq）。
+ * 并发写入者（调度器 emit 与控制面）不会撞号，撞号即抛错让测试失败。
+ */
 export class MemoryEventStore {
   events: WorkflowEvent[] = [];
+  private readonly queues = new Map<string, Promise<unknown>>();
 
-  async append(
+  private enqueue<T>(runId: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.queues.get(runId) ?? Promise.resolve();
+    const next = previous.then(task, task);
+    this.queues.set(
+      runId,
+      next.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    return next;
+  }
+
+  private nextSeqOf(runId: string): number {
+    let max = 0;
+    for (const event of this.events) {
+      if (event.runId === runId && event.seq > max) max = event.seq;
+    }
+    return max + 1;
+  }
+
+  append(
     runId: string,
-    seq: number,
     type: WorkflowEvent['type'],
     payload: unknown,
   ): Promise<WorkflowEvent> {
+    return this.enqueue(runId, () => this.appendDirect(runId, type, payload));
+  }
+
+  async readEvents(runId: string, fromSeq = 0): Promise<WorkflowEvent[]> {
+    return this.events
+      .filter((event) => event.runId === runId && event.seq > fromSeq)
+      .sort((a, b) => a.seq - b.seq);
+  }
+
+  /** 与真实现同语义的终态屏障：流内已终态则跳过（返回 null） */
+  appendTerminal(
+    runId: string,
+    type: WorkflowEvent['type'],
+    payload: unknown,
+  ): Promise<WorkflowEvent | null> {
+    return this.enqueue(runId, async () => {
+      const sorted = await this.readEvents(runId);
+      const last = sorted.at(-1);
+      if (
+        last &&
+        ['RUN_COMPLETED', 'RUN_FAILED', 'RUN_CANCELED'].includes(last.type)
+      ) {
+        return null;
+      }
+      return this.appendDirect(runId, type, payload);
+    });
+  }
+
+  /** 队列临界区内直接落事件（不再重新排队） */
+  private async appendDirect(
+    runId: string,
+    type: WorkflowEvent['type'],
+    payload: unknown,
+  ): Promise<WorkflowEvent> {
+    const seq = this.nextSeqOf(runId);
     const event: WorkflowEvent = {
       id: this.events.length + 1,
       runId,
@@ -28,14 +89,9 @@ export class MemoryEventStore {
     this.events.push(event);
     return event;
   }
-  async readEvents(runId: string, fromSeq = 0): Promise<WorkflowEvent[]> {
-    return this.events
-      .filter((event) => event.runId === runId && event.seq > fromSeq)
-      .sort((a, b) => a.seq - b.seq);
-  }
+
   async nextSeq(runId: string): Promise<number> {
-    const forRun = this.events.filter((event) => event.runId === runId);
-    return (forRun.at(-1)?.seq ?? 0) + 1;
+    return this.nextSeqOf(runId);
   }
 }
 
@@ -96,13 +152,13 @@ export function makeEngine(
   );
 }
 
-/** 访问引擎私有标志集合（暂停/取消测试用） */
+/** 访问引擎私有意图标志（暂停/取消测试用）：runId -> 纪元 */
 export function engineFlags(engine: EngineService): {
-  pauseRequested: Set<string>;
-  cancelRequested: Set<string>;
+  pauseRequested: Map<string, number>;
+  cancelRequested: Map<string, number>;
 } {
   return engine as unknown as {
-    pauseRequested: Set<string>;
-    cancelRequested: Set<string>;
+    pauseRequested: Map<string, number>;
+    cancelRequested: Map<string, number>;
   };
 }

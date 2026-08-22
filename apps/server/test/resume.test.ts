@@ -63,6 +63,20 @@ describe('Human 挂起恢复', () => {
     expect(reviewStarts).toHaveLength(1);
   });
 
+  it('批准后恢复执行，human 节点投影为 succeeded（不再卡 running）', async () => {
+    const eventStore = new MemoryEventStore();
+    const engine = makeEngine(eventStore, humanFlowDefinition());
+    await suspendAtHuman(engine);
+
+    await engine.submitHumanInput('run_1', { approved: true, input: { verdict: '通过' } });
+    await waitForEvent(eventStore, 'RUN_COMPLETED');
+
+    const state = projectRunState('run_1', await eventStore.readEvents('run_1'));
+    expect(state.status).toBe('completed');
+    expect(state.nodes.get('review')?.status).toBe('succeeded');
+    expect(state.nodes.get('review')?.output).toEqual({ verdict: '通过' });
+  });
+
   it('拒绝审批 → NODE_FAILED + RUN_FAILED，不重入引擎', async () => {
     const eventStore = new MemoryEventStore();
     const engine = makeEngine(eventStore, humanFlowDefinition());
@@ -76,6 +90,46 @@ describe('Human 挂起恢复', () => {
     expect(state.error).toContain('审批被拒绝');
     expect(events.map((event) => event.type)).not.toContain('RUN_RESUMED');
     expect(state.nodes.get('review')?.status).toBe('failed');
+  });
+
+  it('条件菱形分支挂起 human 后恢复：汇合 end 正常执行，run 输出非 null（killSubtree 双扣回归）', async () => {
+    // start → cond →(hi) human →(拒绝侧剪枝) 独立节点，两条路径汇合到 end：
+    // 回放时 cond 剪枝与 skipped 节点各触发一次 killSubtree，去重前 end 入度被双扣为 -1 永不 ready
+    const definition = linearDefinition(
+      [
+        node('start', 'start'),
+        node('cond', 'condition', {
+          branches: [
+            { id: 'hi', expression: 'true' },
+            { id: 'lo', expression: 'false' },
+          ],
+        }),
+        node('review', 'human', { prompt: '请审批' }),
+        node('lo_path', 'transform', { template: { path: 'lo' } }),
+        node('end', 'end'),
+      ],
+      [
+        { id: 'e1', source: 'start', target: 'cond' },
+        { id: 'e2', source: 'cond', target: 'review', sourceHandle: 'hi' },
+        { id: 'e3', source: 'cond', target: 'lo_path', sourceHandle: 'lo' },
+        { id: 'e4', source: 'review', target: 'end' },
+        { id: 'e5', source: 'lo_path', target: 'end' },
+      ],
+    );
+    const eventStore = new MemoryEventStore();
+    const engine = makeEngine(eventStore, definition);
+    await engine.execute('run_1');
+
+    await engine.submitHumanInput('run_1', { approved: true, input: { verdict: '通过' } });
+    await waitForEvent(eventStore, 'RUN_COMPLETED');
+
+    const events = await eventStore.readEvents('run_1');
+    const state = projectRunState('run_1', events);
+    expect(state.status).toBe('completed');
+    expect(state.nodes.get('end')?.status).toBe('succeeded');
+    expect(state.nodes.get('lo_path')?.status).toBe('skipped');
+    // end 未配置 outputs 时取最后上游（human input）输出
+    expect(state.output).toEqual({ verdict: '通过' });
   });
 
   it('非 waiting_human 状态提交审批 → 409 冲突', async () => {
