@@ -76,7 +76,7 @@
       "type": "end",
       "name": "结束",
       "position": { "x": 1280, "y": 260 },
-      "data": { "outputs": { "summary": "{{merger.output}}" } }
+      "data": { "outputs": { "summary": "{{merger.output.text}}" } }
     }
   ],
   "edges": [

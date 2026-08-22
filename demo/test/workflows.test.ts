@@ -29,7 +29,7 @@ describe('demo 工作流资产', () => {
 
   it('旗舰流水线：廉价模型规划 → 双 Agent 并行 → human 审查 → 强模型汇总', async () => {
     const definition = JSON.parse(await readFile(join(workflowsDir, 'flagship.json'), 'utf-8')) as {
-      nodes: Array<{ id: string; type: string }>;
+      nodes: Array<{ id: string; type: string; data?: { outputs?: Record<string, string> } }>;
       edges: Array<{ source: string; target: string }>;
     };
     const types = definition.nodes.map((node) => node.type);
@@ -43,6 +43,9 @@ describe('demo 工作流资产', () => {
       .filter((edge) => edge.target === 'review')
       .map((edge) => edge.source);
     expect(reviewSources.sort()).toEqual(['search_agent', 'vision_agent']);
+    // merger 输出为 {text} 包装对象，end 必须取 .text 以输出字符串
+    const end = definition.nodes.find((node) => node.type === 'end');
+    expect(end?.data?.outputs?.summary).toBe('{{merger.output.text}}');
   });
 
   it('深度研究：loop 子图内 agent 绑定 search 工具，report 工具节点绑定 report 服务', async () => {
@@ -53,6 +56,12 @@ describe('demo 工作流资产', () => {
         data?: {
           subgraph?: { nodes: Array<{ data?: { tools?: Array<{ server: string }> } }> };
           server?: string;
+          args?: {
+            title?: unknown;
+            metadata?: Record<string, unknown>;
+            sections?: Array<{ heading?: string; body?: string }>;
+          };
+          outputs?: Record<string, string>;
         };
       }>;
     };
@@ -60,6 +69,23 @@ describe('demo 工作流资产', () => {
     expect(loop?.data?.subgraph?.nodes[0]?.data?.tools?.[0]?.server).toBe('search');
     const toolNode = definition.nodes.find((node) => node.type === 'tool');
     expect(toolNode?.data?.server).toBe('report');
+    // generate_report 的 zod schema 要求 title/body 为字符串、metadata 为 Record<string,string>，
+    // 整串占位符会以对象/null 原样传入必然校验失败，必须用混合文本/.text 强制字符串化
+    const args = toolNode?.data?.args ?? {};
+    expect(args.title).toBe('深度研究报告：{{input.topic}}');
+    expect(args.sections?.[0]?.body).toBe('{{summarize.output.text}}');
+    const recordBody = args.sections?.[1]?.body ?? '';
+    expect(recordBody).toContain('{{research.output}}');
+    expect(recordBody).not.toBe('{{research.output}}');
+    expect(recordBody.startsWith('逐题检索结果')).toBe(true);
+    const metadataValues = Object.values(args.metadata ?? {});
+    expect(metadataValues).toHaveLength(1);
+    for (const value of metadataValues) {
+      expect(typeof value).toBe('string');
+      expect(String(value)).not.toContain('{{');
+    }
+    const end = definition.nodes.find((node) => node.type === 'end');
+    expect(end?.data?.outputs?.report).toBe('{{report.output.text}}');
   });
 
   it('代码审查：condition 分支 id 与出边 sourceHandle 一致', async () => {

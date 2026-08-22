@@ -69,11 +69,11 @@
         "server": "report",
         "tool": "generate_report",
         "args": {
-          "title": "深度研究报告",
-          "metadata": { "主题": "{{input.topic}}" },
+          "title": "深度研究报告：{{input.topic}}",
+          "metadata": { "生成器": "FlowAgent 深度研究 demo" },
           "sections": [
-            { "heading": "核心结论", "body": "{{summarize.output}}" },
-            { "heading": "检索记录", "body": "{{research.output}}" }
+            { "heading": "核心结论", "body": "{{summarize.output.text}}" },
+            { "heading": "检索记录", "body": "逐题检索结果（JSON）：{{research.output}}" }
           ]
         }
       }
@@ -83,7 +83,7 @@
       "type": "end",
       "name": "结束",
       "position": { "x": 1140, "y": 240 },
-      "data": { "outputs": { "report": "{{report.output}}" } }
+      "data": { "outputs": { "report": "{{report.output.text}}" } }
     }
   ],
   "edges": [

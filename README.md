@@ -87,6 +87,18 @@ pnpm seed:demos        # 按名称幂等，重复执行只跳过不覆盖
 
 首次运行前：`.env` 按示例配置 Provider（聚合平台一把 key 即可），在 MCP Servers 页连接 search/sandbox/report（命令见 `.env.example`）。
 
+运行输入：三个 demo 分别消费 `input.topic`（旗舰/深度研究）与 `input.diff`（代码审查）。Web UI 的「▶ 运行」当前以空输入启动（提示词会优雅降级为空主题/空 diff）；要传入输入可走 API：
+
+```bash
+curl -X POST http://localhost:3000/api/workflows/<工作流id>/runs \
+  -H 'Content-Type: application/json' \
+  -d '{"input":{"topic":"MCP 生态现状"}}'
+```
+
+（或经 Workflow→MCP Bridge 的工具 `input` 参数传入。）
+
+> 注：画布「导入 JSON → 保存」的往返会丢弃节点级 `timeoutMs`/`retry` 等字段（画布模型限制），demo 的推荐加载方式是 `pnpm seed:demos`（保留完整定义，含重试/超时策略）。
+
 ## Non-Goals
 
 刻意不做：RAG/知识库节点、应用发布、模板市场、多租户、协作编辑。
