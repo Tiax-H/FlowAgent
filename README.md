@@ -54,11 +54,16 @@ Docker 一键部署：
 docker compose up -d
 ```
 
-在 Claude Code 中把工作流当工具用（Workflow→MCP Bridge）：
+### 把工作流当工具用（Workflow→MCP Bridge）
+
+先启动 FlowAgent（`pnpm dev`），bridge 以独立进程把所有已保存工作流暴露为 MCP 工具：
 
 ```json
 { "mcpServers": { "flowagent": { "command": "pnpm", "args": ["mcp:serve"] } } }
 ```
+
+可用工具：`flowagent_list_workflows` / `flowagent_run_workflow`（waitMs=0 立即返回持久句柄）/ `flowagent_get_run`（轮询）/ `flowagent_refresh_tools`（热同步新工作流）/ `flowagent_run_<workflowId>`（每个工作流一个专属工具）。
+长任务不必阻塞会话：runId 跨进程持久，随时回来查询或回放。
 
 ## 示例工作流
 

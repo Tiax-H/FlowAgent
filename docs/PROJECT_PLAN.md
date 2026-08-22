@@ -92,8 +92,8 @@
 
 ### 3.4 Workflow→MCP Bridge
 
-- 引擎侧起 MCP Server，把已保存工作流暴露为 tool（`flowagent_run:<workflow_id>`）
-- 长耗时工作流走 Tasks 模式（持久句柄 + 轮询）
+- 把已保存工作流暴露为 tool（`flowagent_run_<workflow_id>`，工具名受 MCP 严格客户端字符集约束用下划线）；新增工作流后客户端调 `flowagent_refresh_tools` 热同步
+- 长耗时工作流的持久句柄 + 轮询：runId 即跨进程持久句柄（事件溯源保证），`flowagent_get_run` 为轮询入口，`waitMs=0` 立即返回句柄。协议级 MCP Tasks 扩展待 SDK 结束 experimental 后接入（1.30.0 已有雏形）
 - README 演示：Claude Code 一行配置调用 FlowAgent 工作流
 
 ## 4. 节点类型（8 种，刻意不膨胀）
@@ -184,3 +184,4 @@ flowagent/
 | v2 | — | 重新定位为 Durable Agent Runtime；差异化三点；砍掉广度功能 |
 | v2.1 | — | 新增 Workflow→MCP Bridge（双向 MCP）；补充 Skill 对比；旗舰 Demo 定为多模型协作流水线 |
 | —（版本不变） | 2026-08-22 | 第 8 周里程碑落地：投影驱动可重入调度器、三路径恢复 API + 取消、Human 挂起持久化、节点级超时/指数退避重试、崩溃对账、运行定义快照、回放时间轴 UI。实现细节与偏差见 [docs/DURABLE_EXECUTION.md](DURABLE_EXECUTION.md) |
+| —（版本不变） | 2026-08-22 | 第 9 周 Workflow→MCP Bridge 落地：apps/bridge 独立进程（stdio/Streamable HTTP），通用 + 每工作流动态工具，runId 持久句柄 + 轮询替代协议级 Tasks（SDK experimental 暂不采用） |

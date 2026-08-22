@@ -14,9 +14,9 @@
     "test": "turbo run test",
     "lint": "eslint .",
     "format": "prettier --write \"**/*.{ts,tsx,md,json,yaml,yml}\"",
+    "mcp:serve": "pnpm --filter @flowagent/bridge start",
     "db:generate": "pnpm --filter @flowagent/server db:generate",
-    "db:migrate": "pnpm --filter @flowagent/server db:migrate",
-    "mcp:serve": "pnpm --filter @flowagent/server mcp:serve"
+    "db:migrate": "pnpm --filter @flowagent/server db:migrate"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
