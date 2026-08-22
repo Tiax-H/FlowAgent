@@ -166,6 +166,22 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@20.19.43)(lightningcss@1.32.0)(terser@5.50.0)
 
+  servers/report:
+    dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.30.0
+        version: 1.30.0(zod@4.4.3)
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      typescript:
+        specifier: ^5.5.4
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@20.19.43)(lightningcss@1.32.0)(terser@5.50.0)
+
   servers/sandbox:
     dependencies:
       '@modelcontextprotocol/sdk':
