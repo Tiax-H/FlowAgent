@@ -69,11 +69,23 @@ docker compose up -d
 
 ## 示例工作流
 
-| Demo | 展示能力 |
-|------|----------|
-| 多模型协作流水线（旗舰） | 廉价模型规划 → 视觉/搜索 Agent 并行 → Human 审查 → 汇总 |
-| 深度研究员 | Loop 节点多轮搜索 + 交叉验证 + 引用溯源 |
-| 代码审查机器人 | 读 diff → LLM 分析 → 条件分支 → 严重问题转人工审批 |
+三个开箱即用的 demo（`demo/workflows/`）：
+
+| Demo | 展示能力 | 依赖 |
+|------|----------|------|
+| 旗舰·多模型协作流水线 | 廉价模型规划 → 视觉/搜索 Agent 并行 → Human 审查 → 强模型汇总 | openai + aggregator 两个 Provider；search Server |
+| 深度研究 | Loop 多轮检索 + 交叉汇总 + 报告生成 | aggregator Provider；search/report Server |
+| 代码审查 | 条件分支 + 高风险转人工审批 | 任一 Provider（默认 openai） |
+
+一条命令导入（需 server 已启动）：
+
+```bash
+pnpm seed:demos        # 按名称幂等，重复执行只跳过不覆盖
+```
+
+或在画布编辑器里用「导入 JSON」按钮导入 `demo/workflows/*.json`，「导出 JSON」可把当前画布存为文件分享。
+
+首次运行前：`.env` 按示例配置 Provider（聚合平台一把 key 即可），在 MCP Servers 页连接 search/sandbox/report（命令见 `.env.example`）。
 
 ## Non-Goals
 

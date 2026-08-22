@@ -186,3 +186,4 @@ flowagent/
 | —（版本不变） | 2026-08-22 | 第 8 周里程碑落地：投影驱动可重入调度器、三路径恢复 API + 取消、Human 挂起持久化、节点级超时/指数退避重试、崩溃对账、运行定义快照、回放时间轴 UI。实现细节与偏差见 [docs/DURABLE_EXECUTION.md](DURABLE_EXECUTION.md) |
 | —（版本不变） | 2026-08-22 | 第 9 周 Workflow→MCP Bridge 落地：apps/bridge 独立进程（stdio/Streamable HTTP），通用 + 每工作流动态工具，runId 持久句柄 + 轮询替代协议级 Tasks（SDK experimental 暂不采用） |
 | —（版本不变） | 2026-08-22 | 第 9 周 demo Server 补齐：servers/sandbox（限额子进程 JS 执行）与 servers/report（Markdown 报告/引用生成），对齐 §7 目录结构 |
+| —（版本不变） | 2026-08-22 | 第 9 周收尾：demo/ 三个示例工作流资产（旗舰多模型协作/深度研究/代码审查）、seed:demos 一键导入、编辑器导入导出与列表删除（§8 旗舰/辅助 Demo 落地） |
