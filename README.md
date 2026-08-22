@@ -58,6 +58,8 @@ docker compose up -d
 
 先启动 FlowAgent（`pnpm dev`），bridge 以独立进程把所有已保存工作流暴露为 MCP 工具：
 
+首次使用前先构建：`pnpm build`（Turborepo 会连同依赖一起构建 bridge）。
+
 ```json
 { "mcpServers": { "flowagent": { "command": "pnpm", "args": ["mcp:serve"] } } }
 ```

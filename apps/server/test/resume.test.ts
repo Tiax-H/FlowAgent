@@ -1,9 +1,25 @@
 import { ConflictException } from '@nestjs/common';
+import type { WorkflowEvent } from '@flowagent/shared';
 import { describe, expect, it } from 'vitest';
 
 import { projectRunState } from '../src/engine/projection';
 import { EngineService } from '../src/engine/scheduler';
 import { MemoryEventStore, linearDefinition, makeEngine, node } from './engine-harness';
+
+/** 轮询事件流直至目标事件出现（≤2s，10ms 步进）；审批通过后引擎为异步执行，需等终态事件 */
+async function waitForEvent(
+  eventStore: MemoryEventStore,
+  type: WorkflowEvent['type'],
+): Promise<WorkflowEvent> {
+  const deadline = Date.now() + 2000;
+  for (;;) {
+    const events = await eventStore.readEvents('run_1');
+    const found = events.find((event) => event.type === type);
+    if (found) return found;
+    if (Date.now() >= deadline) throw new Error(`等待事件 ${type} 超时`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
 
 function humanFlowDefinition(): Record<string, unknown> {
   return linearDefinition(
@@ -30,6 +46,7 @@ describe('Human 挂起恢复', () => {
     await suspendAtHuman(engine);
 
     await engine.submitHumanInput('run_1', { approved: true, input: { verdict: '通过' } });
+    await waitForEvent(eventStore, 'RUN_COMPLETED');
 
     const events = await eventStore.readEvents('run_1');
     const state = projectRunState('run_1', events);

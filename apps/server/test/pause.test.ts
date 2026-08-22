@@ -1,8 +1,24 @@
 import { ConflictException } from '@nestjs/common';
+import type { WorkflowEvent } from '@flowagent/shared';
 import { describe, expect, it } from 'vitest';
 
 import { projectRunState } from '../src/engine/projection';
 import { MemoryEventStore, engineFlags, linearDefinition, makeEngine, node } from './engine-harness';
+
+/** 轮询事件流直至目标事件出现（≤2s，10ms 步进）；resume 为异步执行，需等终态事件 */
+async function waitForEvent(
+  eventStore: MemoryEventStore,
+  type: WorkflowEvent['type'],
+): Promise<WorkflowEvent> {
+  const deadline = Date.now() + 2000;
+  for (;;) {
+    const events = await eventStore.readEvents('run_1');
+    const found = events.find((event) => event.type === type);
+    if (found) return found;
+    if (Date.now() >= deadline) throw new Error(`等待事件 ${type} 超时`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
 
 describe('主动暂停与取消', () => {
   it('调度前请求暂停 → RUN_SUSPENDED(paused)，无节点执行', async () => {
@@ -49,6 +65,7 @@ describe('主动暂停与取消', () => {
     await engine.execute('run_1');
 
     await engine.resume('run_1');
+    await waitForEvent(eventStore, 'RUN_COMPLETED');
 
     const state = projectRunState('run_1', await eventStore.readEvents('run_1'));
     expect(state.status).toBe('completed');

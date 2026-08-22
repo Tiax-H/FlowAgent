@@ -346,6 +346,8 @@ function parseRunInput(raw: string | null): unknown {
 export class EngineService {
   private readonly logger = new Logger(EngineService.name);
   private readonly running = new Set<string>();
+  /** 前一轮退出前收到重入请求的 run：需在前一轮结束后补跑一轮 */
+  private readonly pendingRounds = new Set<string>();
   private readonly pauseRequested = new Set<string>();
   private readonly cancelRequested = new Set<string>();
 
@@ -357,17 +359,26 @@ export class EngineService {
     private readonly runsService: RunsService,
   ) {}
 
-  /** 调度入口（可重入）：回放事件重建状态后从断点继续；run 已在执行则幂等返回 */
+  /** 调度入口（可重入）：回放事件重建状态后从断点继续；前一轮仍在执行时登记补跑，避免恢复事件被静默丢弃 */
   async execute(runId: string): Promise<void> {
-    if (this.running.has(runId)) return;
+    if (this.running.has(runId)) {
+      this.pendingRounds.add(runId);
+      return;
+    }
     this.running.add(runId);
     try {
-      await this.doExecute(runId);
-    } catch (error) {
-      this.logger.error(`run ${runId} 调度器异常: ${String(error)}`);
-      await this.terminate(runId, 'RUN_FAILED', {
-        error: `调度器异常: ${error instanceof Error ? error.message : String(error)}`,
-      }).catch(() => undefined);
+      do {
+        this.pendingRounds.delete(runId);
+        try {
+          await this.doExecute(runId);
+        } catch (error) {
+          this.logger.error(`run ${runId} 调度器异常: ${String(error)}`);
+          await this.terminate(runId, 'RUN_FAILED', {
+            error: `调度器异常: ${error instanceof Error ? error.message : String(error)}`,
+          }).catch(() => undefined);
+          break;
+        }
+      } while (this.pendingRounds.has(runId));
     } finally {
       this.running.delete(runId);
     }
@@ -403,7 +414,7 @@ export class EngineService {
     const { projected } = await this.loadProjection(runId);
     if (projected.status !== 'suspended') throw new ConflictException('仅挂起状态的运行可恢复');
     await this.appendEvent(runId, 'RUN_RESUMED', { mode: 'resume' });
-    await this.execute(runId);
+    void this.execute(runId).catch(() => undefined);
   }
 
   /** 失败断点重试：failed 节点重新武装后从断点继续 */
@@ -412,7 +423,7 @@ export class EngineService {
     const { projected } = await this.loadProjection(runId);
     if (projected.status !== 'failed') throw new ConflictException('仅失败的运行可从断点重试');
     await this.appendEvent(runId, 'RUN_RESUMED', { mode: 'retry_failed' });
-    await this.execute(runId);
+    void this.execute(runId).catch(() => undefined);
   }
 
   /** Human 审批：批准则恢复执行；拒绝则直接落 NODE_FAILED + RUN_FAILED（不重入引擎） */
@@ -436,7 +447,7 @@ export class EngineService {
       return;
     }
     await this.appendEvent(runId, 'RUN_RESUMED', { mode: 'human' });
-    await this.execute(runId);
+    void this.execute(runId).catch(() => undefined);
   }
 
   private humanWaitingNodeType(events: WorkflowEvent[], nodeId: string): string {
