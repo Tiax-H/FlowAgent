@@ -14,7 +14,7 @@ import {
   type Node,
   type NodeMouseHandler,
 } from '@xyflow/react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { validateWorkflowDefinition, type NodeType } from '@flowagent/shared';
 
 import { workflowsApi } from '../api/workflows';
@@ -22,6 +22,7 @@ import { FlowAgentNode } from '../workflow/components/FlowAgentNode';
 import { NodePalette } from '../workflow/components/NodePalette';
 import { PropertyPanel } from '../workflow/components/PropertyPanel';
 import { createFlowNode, definitionToFlow, flowToDefinition } from '../workflow/convert';
+import { exportFileName, parseImportedWorkflow } from '../workflow/import';
 import type { WorkflowRecord } from '../workflow/types';
 
 import '@xyflow/react/dist/style.css';
@@ -43,6 +44,7 @@ function EditorCanvas({ workflowId, onBack, onRun }: EditorProps) {
   const [saved, setSaved] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const { screenToFlowPosition } = useReactFlow();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (workflowId === null) {
@@ -165,6 +167,39 @@ function EditorCanvas({ workflowId, onBack, onRun }: EditorProps) {
     }
   }
 
+  function handleImportFile(file: File) {
+    void file
+      .text()
+      .then((raw) => {
+        const result = parseImportedWorkflow(raw);
+        if (!result.ok) {
+          setErrors([result.error]);
+          return;
+        }
+        setErrors([]);
+        setSaved(null);
+        setRecord(null);
+        setName(result.value.name);
+        const flow = definitionToFlow(result.value.definition);
+        setNodes(flow.nodes);
+        setEdges(flow.edges);
+      })
+      .catch((cause: unknown) =>
+        setErrors([cause instanceof Error ? cause.message : String(cause)]),
+      );
+  }
+
+  function handleExport() {
+    const payload = JSON.stringify({ ...definition, name }, null, 2);
+    const blob = new Blob([payload], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = exportFileName(name);
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
   const selectedNode = nodes.find((node) => node.selected) ?? null;
 
   return (
@@ -183,6 +218,31 @@ function EditorCanvas({ workflowId, onBack, onRun }: EditorProps) {
           className="w-56 rounded border border-transparent px-2 py-1 text-sm font-medium hover:border-neutral-300 focus:border-neutral-400 focus:outline-none"
         />
         {record && <span className="text-xs text-neutral-400">v{record.version}</span>}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) handleImportFile(file);
+            event.target.value = '';
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-600 hover:bg-neutral-100"
+        >
+          导入 JSON
+        </button>
+        <button
+          type="button"
+          onClick={handleExport}
+          className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-600 hover:bg-neutral-100"
+        >
+          导出 JSON
+        </button>
         <button
           type="button"
           disabled={busy}

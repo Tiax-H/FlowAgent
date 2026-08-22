@@ -65,6 +65,16 @@ export function App() {
     }
   }
 
+  async function handleDelete(workflow: WorkflowRecord) {
+    if (!window.confirm(`删除工作流「${workflow.name}」？此操作不可恢复。`)) return;
+    try {
+      await workflowsApi.remove(workflow.id);
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
   return (
     <div className="flex h-screen flex-col bg-neutral-50 text-neutral-900">
       <header className="flex items-center justify-between border-b border-neutral-200 px-6 py-3">
@@ -133,17 +143,25 @@ export function App() {
           )}
           <ul className="space-y-2">
             {workflows.map((workflow) => (
-              <li key={workflow.id}>
+              <li key={workflow.id} className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => setPage({ kind: 'editor', workflowId: workflow.id })}
-                  className="flex w-full items-center gap-3 rounded-lg border border-neutral-200 bg-white p-3 text-left transition-colors hover:border-neutral-400"
+                  className="flex flex-1 items-center gap-3 rounded-lg border border-neutral-200 bg-white p-3 text-left transition-colors hover:border-neutral-400"
                 >
                   <span className="text-sm font-medium">{workflow.name}</span>
                   <span className="text-xs text-neutral-400">v{workflow.version}</span>
                   <span className="ml-auto text-xs text-neutral-400">
                     {new Date(workflow.updatedAt).toLocaleString('zh-CN')}
                   </span>
+                </button>
+                <button
+                  type="button"
+                  title="删除工作流"
+                  onClick={() => void handleDelete(workflow)}
+                  className="rounded-lg border border-neutral-200 bg-white px-3 py-3 text-sm text-neutral-400 transition-colors hover:border-red-300 hover:text-red-600"
+                >
+                  删除
                 </button>
               </li>
             ))}
