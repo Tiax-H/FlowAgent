@@ -27,6 +27,8 @@ model WorkflowRun {
   workflowId       String
   workflowVersion  Int
   input            String?
+  /// 启动时的工作流定义快照（JSON）；恢复执行以此为准，避免定义后续演进影响历史 run
+  definitionSnapshot String?
   /// 投影缓存：pending/running/suspended/waiting_human/completed/failed/canceled
   status           String    @default("pending")
   output           String?

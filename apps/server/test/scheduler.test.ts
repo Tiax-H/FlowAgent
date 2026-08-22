@@ -1,69 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
-import type { WorkflowEvent } from '@flowagent/shared';
+import { describe, expect, it } from 'vitest';
 
-import { EngineService } from '../src/engine/scheduler';
-import { LlmAdapter } from '../src/llm/llm.adapter';
-import { McpRegistryService } from '../src/mcp/mcp.registry';
-import { PrismaService } from '../src/prisma/prisma.service';
-import { RunsService } from '../src/runs/runs.service';
-import { EventStore } from '../src/engine/event-store.service';
 import { projectRunState } from '../src/engine/projection';
-
-/* ---------------- 测试基建：内存 EventStore ---------------- */
-
-class MemoryEventStore {
-  events: WorkflowEvent[] = [];
-
-  async append(
-    runId: string,
-    seq: number,
-    type: WorkflowEvent['type'],
-    payload: unknown,
-  ): Promise<WorkflowEvent> {
-    const event: WorkflowEvent = {
-      id: this.events.length + 1,
-      runId,
-      seq,
-      type,
-      payload,
-      timestamp: new Date().toISOString(),
-    };
-    this.events.push(event);
-    return event;
-  }
-  async readEvents(runId: string, fromSeq = 0): Promise<WorkflowEvent[]> {
-    return this.events
-      .filter((event) => event.runId === runId && event.seq > fromSeq)
-      .sort((a, b) => a.seq - b.seq);
-  }
-  async nextSeq(runId: string): Promise<number> {
-    const forRun = this.events.filter((event) => event.runId === runId);
-    return (forRun.at(-1)?.seq ?? 0) + 1;
-  }
-}
-
-vi.mock('../src/runs/runs.service', () => ({
-  RunsService: class {
-    async syncFromProjection(): Promise<void> {}
-  },
-}));
-
-/* ---------------- 工具函数 ---------------- */
-
-function linearDefinition(nodes: unknown[], edges: unknown[]): Record<string, unknown> {
-  return { schemaVersion: 1, nodes, edges };
-}
-
-function node(
-  id: string,
-  type: string,
-  data: Record<string, unknown> = {},
-  position = { x: 0, y: 0 },
-) {
-  return { id, type, name: id, position, data };
-}
-
-/* ---------------- 用例 ---------------- */
+import { MemoryEventStore, linearDefinition, makeEngine, node } from './engine-harness';
 
 describe('EngineService 调度器', () => {
   it('线性 start→transform→end 完整执行并产出输出', async () => {
@@ -80,14 +18,15 @@ describe('EngineService 调度器', () => {
     );
 
     const eventStore = new MemoryEventStore();
-    const engine = makeEngine(eventStore, definition);
-    await engine.execute('run_1', 'wf_1', { name: 'FlowAgent' });
+    const engine = makeEngine(eventStore, definition, { input: { name: 'FlowAgent' } });
+    await engine.execute('run_1');
 
     const events = await eventStore.readEvents('run_1');
     const types = events.map((event) => event.type);
     expect(types).toContain('NODE_STARTED');
     expect(types).toContain('NODE_SUCCEEDED');
     expect(types).toContain('RUN_COMPLETED');
+    expect(types).toContain('CHECKPOINT_SAVED');
 
     const state = projectRunState('run_1', events);
     expect(state.status).toBe('completed');
@@ -112,7 +51,7 @@ describe('EngineService 调度器', () => {
 
     const eventStore = new MemoryEventStore();
     const engine = makeEngine(eventStore, definition);
-    await engine.execute('run_1', 'wf_1', null);
+    await engine.execute('run_1');
 
     const state = projectRunState('run_1', await eventStore.readEvents('run_1'));
     expect(state.status).toBe('completed');
@@ -144,8 +83,8 @@ describe('EngineService 调度器', () => {
     );
 
     const eventStore = new MemoryEventStore();
-    const engine = makeEngine(eventStore, definition);
-    await engine.execute('run_1', 'wf_1', { score: 0.9 });
+    const engine = makeEngine(eventStore, definition, { input: { score: 0.9 } });
+    await engine.execute('run_1');
 
     const events = await eventStore.readEvents('run_1');
     const state = projectRunState('run_1', events);
@@ -171,7 +110,7 @@ describe('EngineService 调度器', () => {
 
     const eventStore = new MemoryEventStore();
     const engine = makeEngine(eventStore, definition);
-    await engine.execute('run_1', 'wf_1', null);
+    await engine.execute('run_1');
 
     const state = projectRunState('run_1', await eventStore.readEvents('run_1'));
     expect(state.status).toBe('failed');
@@ -190,7 +129,7 @@ describe('EngineService 调度器', () => {
 
     const eventStore = new MemoryEventStore();
     const engine = makeEngine(eventStore, definition);
-    await engine.execute('run_1', 'wf_1', null);
+    await engine.execute('run_1');
 
     const state = projectRunState('run_1', await eventStore.readEvents('run_1'));
     expect(state.status).toBe('waiting_human');
@@ -210,7 +149,7 @@ describe('EngineService 调度器', () => {
 
     const eventStore = new MemoryEventStore();
     const engine = makeEngine(eventStore, definition);
-    await engine.execute('run_1', 'wf_1', null);
+    await engine.execute('run_1');
 
     const events = await eventStore.readEvents('run_1');
     const state = projectRunState('run_1', events);
@@ -243,7 +182,7 @@ describe('EngineService 调度器', () => {
 
     const eventStore = new MemoryEventStore();
     const engine = makeEngine(eventStore, definition);
-    await engine.execute('run_1', 'wf_1', null);
+    await engine.execute('run_1');
 
     const state = projectRunState('run_1', await eventStore.readEvents('run_1'));
     expect(state.status).toBe('completed');
@@ -254,26 +193,19 @@ describe('EngineService 调度器', () => {
     expect(loopOutput.iterations).toBe(3);
     expect(loopOutput.results).toEqual([{ v: 'a' }, { v: 'b' }, { v: 'c' }]);
   });
+
+  it('终态 run 重入 execute 幂等返回，不产生新事件', async () => {
+    const definition = linearDefinition(
+      [node('start', 'start'), node('end', 'end')],
+      [{ id: 'e1', source: 'start', target: 'end' }],
+    );
+
+    const eventStore = new MemoryEventStore();
+    const engine = makeEngine(eventStore, definition);
+    await engine.execute('run_1');
+    const countAfterFirst = (await eventStore.readEvents('run_1')).length;
+
+    await engine.execute('run_1');
+    expect((await eventStore.readEvents('run_1')).length).toBe(countAfterFirst);
+  });
 });
-
-/* 引擎工厂：内存 Prisma + 真 EngineService。
-   用例只覆盖纯模板/条件/挂起/Loop 路径，不触碰 LLM/MCP（其 stub 经构造注入永不触发）。 */
-function makeEngine(eventStore: MemoryEventStore, definition: unknown): EngineService {
-  const workflows = new Map([['wf_1', { id: 'wf_1', definition: JSON.stringify(definition) }]]);
-  const prismaStub = {
-    workflow: {
-      findUnique: async ({ where }: { where: { id: string } }) => workflows.get(where.id) ?? null,
-    },
-    mcpTool: { findMany: async () => [] },
-  } as unknown as PrismaService;
-  const runsStub = { syncFromProjection: async () => undefined } as unknown as RunsService;
-
-  const engine = new EngineService(
-    prismaStub,
-    eventStore as unknown as EventStore,
-    {} as LlmAdapter,
-    {} as McpRegistryService,
-    runsStub,
-  );
-  return engine;
-}

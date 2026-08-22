@@ -4,9 +4,11 @@ import { McpModule } from '../mcp/mcp.module';
 import { RunsModule } from '../runs/runs.module';
 import { RunsService } from '../runs/runs.service';
 import { EngineService } from './scheduler';
+import { RunControlController } from './run-control.controller';
 
 @Module({
   imports: [RunsModule, McpModule],
+  controllers: [RunControlController],
   providers: [EngineService],
   exports: [EngineService],
 })
@@ -17,8 +19,6 @@ export class EngineModule implements OnModuleInit {
   ) {}
 
   onModuleInit(): void {
-    this.runsService.setRunStarter((runId, workflowId, input) =>
-      this.engine.execute(runId, workflowId, input),
-    );
+    this.runsService.setRunStarter((runId) => this.engine.execute(runId));
   }
 }

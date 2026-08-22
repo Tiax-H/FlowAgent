@@ -1,21 +1,25 @@
 /**
- * 拓扑调度器：事件驱动的 DAG 执行引擎。
+ * 拓扑调度器：投影驱动、可重入的 DAG 执行引擎。
  *
  * 红线：
  * - 主图必须是严格 DAG（启动前用 shared 校验复检）
- * - 持久状态只能来自事件投影；内存 nodeOutputs 仅为本次调度的工作集
+ * - 持久状态只能来自事件投影；内存记账仅为本次调度的工作集
+ * - 控制动作（暂停/恢复/审批/取消/失败重试）一律追加事件，绝不 UPDATE 既有事件
  *
  * 语义：
- * - 就绪节点并发执行（并行语义）
- * - Condition 求值选分支，未选分支下游跳过（剪枝）
- * - 节点失败 → RUN_FAILED，停止调度新节点
- * - Human 挂起 → RUN_SUSPENDED，停止调度（恢复路径第 8 周）
+ * - execute() 每次先回放该 run 的全部事件重建调度记账，再从断点继续（首次运行 = 空投影退化）
+ * - 就绪节点并发执行；Condition 求值选分支，未选分支下游跳过（剪枝）
+ * - 节点支持单次尝试超时与指数退避重试；Human 挂起不吃超时/重试
+ * - 每个节点 settle 后发射 CHECKPOINT_SAVED（seq = 已消费到的最后一条事件序号）
  */
-import { Injectable, Logger } from '@nestjs/common';
+import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import type {
   ConditionNodeData,
+  HumanInputRequest,
+  NodeRetryPolicy,
   WorkflowDefinition,
   WorkflowEdge,
+  WorkflowEvent,
   WorkflowEventType,
   WorkflowNode,
 } from '@flowagent/shared';
@@ -27,11 +31,16 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RunsService } from '../runs/runs.service';
 import { EventStore } from './event-store.service';
 import { evaluateCondition } from './expression';
+import {
+  isTerminalRunStatus,
+  projectRunState,
+  type ProjectedRunState,
+} from './projection';
 import { createAgentExecutor } from './executors/agent.executor';
 import { createHumanExecutor, createLoopExecutor } from './executors/human-loop.executors';
 import { createLlmExecutor, createToolExecutor } from './executors/llm-tool.executors';
 import { endExecutor, startExecutor, transformExecutor } from './executors/simple.executors';
-import type { NodeRuntimeServices } from './executors/types';
+import type { NodeExecutionResult, NodeRuntimeServices } from './executors/types';
 import { type TemplateContext } from './template';
 
 type EmitFn = (type: WorkflowEventType, payload: Record<string, unknown>) => Promise<void>;
@@ -142,10 +151,203 @@ export async function runSubgraph(
   return lastOutput;
 }
 
+/* ---------------- 韧性策略：超时 + 指数退避重试（纯函数，供单测） ---------------- */
+
+/** 规范化后的重试策略（缺省值已填充） */
+export interface ResolvedRetryPolicy {
+  maxAttempts: number;
+  initialDelayMs: number;
+  backoffFactor: number;
+  maxDelayMs: number;
+}
+
+/** 解析节点 retry 配置；缺失/非法返回 null（= 只试一次） */
+export function normalizeRetryPolicy(
+  retry: NodeRetryPolicy | undefined,
+): ResolvedRetryPolicy | null {
+  if (!retry || typeof retry.maxAttempts !== 'number' || retry.maxAttempts < 1) return null;
+  return {
+    maxAttempts: Math.floor(retry.maxAttempts),
+    initialDelayMs:
+      typeof retry.initialDelayMs === 'number' && retry.initialDelayMs > 0
+        ? retry.initialDelayMs
+        : 500,
+    backoffFactor:
+      typeof retry.backoffFactor === 'number' && retry.backoffFactor > 0 ? retry.backoffFactor : 2,
+    maxDelayMs:
+      typeof retry.maxDelayMs === 'number' && retry.maxDelayMs > 0 ? retry.maxDelayMs : 30_000,
+  };
+}
+
+/** 第 failedAttempt 次失败后的退避等待（毫秒） */
+export function retryDelayMs(policy: ResolvedRetryPolicy, failedAttempt: number): number {
+  const raw = policy.initialDelayMs * policy.backoffFactor ** (failedAttempt - 1);
+  return Math.min(Math.round(raw), policy.maxDelayMs);
+}
+
+/** 超时包装：Promise.race + clearTimeout 防句柄泄漏；timeoutMs 为 null 时透传 */
+export function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number | null,
+  message: string,
+): Promise<T> {
+  if (timeoutMs === null) return promise;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/* ---------------- 恢复记账：由投影重建调度工作集（纯函数，供单测） ---------------- */
+
+/** 可重入调度的工作集：nodeOutputs/入度/邻接/就绪队列/历史 Human 挂起锚点 */
+export interface SchedulingWorkset {
+  nodeOutputs: Record<string, unknown>;
+  indegree: Map<string, number>;
+  adjacency: Map<string, string[]>;
+  ready: string[];
+  waitingHumanNodeId: string | null;
+}
+
+/**
+ * 从事件投影重建调度记账，与运行期行为逐位等价：
+ * - succeeded：恢复输出并结算出边（condition 按 selected 分支结算/剪枝）
+ * - skipped：沿出边剪枝（killSubtree 永不 push ready，避免被剪子树误调度）
+ * - suspended 且为挂起锚点：排除在 ready 外，下游靠入度饥饿不调度
+ * - running：human 且已批准 = 已解决挂起；其余为崩溃残留 = 断点重跑
+ * - failed：rearmFailedNodes 时视作待执行（失败断点重试路径）
+ */
+export function rebuildSchedulingWorkset(
+  definition: WorkflowDefinition,
+  projected: ProjectedRunState,
+  options: { rearmFailedNodes: boolean },
+): SchedulingWorkset {
+  const adjacency = new Map<string, string[]>();
+  const initialIndegree = new Map<string, number>();
+  for (const node of definition.nodes) {
+    adjacency.set(node.id, []);
+    initialIndegree.set(node.id, 0);
+  }
+  for (const edge of definition.edges) {
+    if (!initialIndegree.has(edge.source) || !initialIndegree.has(edge.target)) continue;
+    initialIndegree.set(edge.target, (initialIndegree.get(edge.target) ?? 0) + 1);
+    adjacency.get(edge.source)?.push(edge.target);
+  }
+
+  const indegree = new Map(initialIndegree);
+  const ready: string[] = [];
+  const nodeOutputs: Record<string, unknown> = {};
+  const workset: SchedulingWorkset = {
+    nodeOutputs,
+    indegree,
+    adjacency,
+    ready,
+    waitingHumanNodeId: null,
+  };
+
+  const isRunnable = (id: string): boolean => {
+    const state = projected.nodes.get(id);
+    const status = state?.status ?? 'idle';
+    if (status === 'idle') return true;
+    if (status === 'running') {
+      // human 且已批准 = 已解决挂起，禁止重跑
+      const node = definition.nodes.find((item) => item.id === id);
+      return !(node?.type === 'human' && state?.approved === true);
+    }
+    return status === 'failed' && options.rearmFailedNodes;
+  };
+  // 正常结算：减一；归零且目标可执行则 push 进 ready
+  const settleDecrement = (target: string): void => {
+    const remaining = (indegree.get(target) ?? 0) - 1;
+    indegree.set(target, remaining);
+    if (remaining === 0 && isRunnable(target)) ready.push(target);
+  };
+  // 剪枝链记账：等价于运行期 skipDownstream——减一，仅当恰好归零时递归；永不 push ready
+  const killSubtree = (id: string): void => {
+    for (const target of adjacency.get(id) ?? []) {
+      const remaining = (indegree.get(target) ?? 0) - 1;
+      indegree.set(target, remaining);
+      if (remaining === 0) killSubtree(target);
+    }
+  };
+
+  // 种子：原始入度为 0 且可执行的节点
+  for (const node of definition.nodes) {
+    if ((initialIndegree.get(node.id) ?? 0) === 0 && isRunnable(node.id)) ready.push(node.id);
+  }
+
+  let lastUpstreamOutput: unknown = null;
+  let hasLastUpstream = false;
+  for (const node of topoSort(definition.nodes, definition.edges)) {
+    const state = projected.nodes.get(node.id);
+    if (!state) continue;
+    switch (state.status) {
+      case 'succeeded': {
+        nodeOutputs[node.id] = { output: state.output };
+        lastUpstreamOutput = state.output;
+        hasLastUpstream = true;
+        if (node.type === 'condition') {
+          const output =
+            state.output !== null && typeof state.output === 'object'
+              ? (state.output as { selected?: unknown })
+              : null;
+          const selected = typeof output?.selected === 'string' ? output.selected : null;
+          for (const edge of definition.edges.filter((item) => item.source === node.id)) {
+            if (selected !== null && edge.sourceHandle === selected) {
+              settleDecrement(edge.target);
+            } else {
+              killSubtree(edge.target);
+            }
+          }
+        } else {
+          for (const target of adjacency.get(node.id) ?? []) settleDecrement(target);
+        }
+        break;
+      }
+      case 'skipped':
+        killSubtree(node.id);
+        break;
+      case 'suspended':
+        if (projected.waitingHumanNodeId === node.id) workset.waitingHumanNodeId = node.id;
+        break;
+      case 'running': {
+        if (node.type === 'human' && state.approved === true) {
+          nodeOutputs[node.id] = { output: state.humanInput ?? null };
+          lastUpstreamOutput = state.humanInput ?? null;
+          hasLastUpstream = true;
+          for (const target of adjacency.get(node.id) ?? []) settleDecrement(target);
+        }
+        // 其余 running = 崩溃残留，不动作；入度归零时进 ready（断点重跑语义）
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  if (hasLastUpstream) nodeOutputs['__last_upstream__'] = { output: lastUpstreamOutput };
+  return workset;
+}
+
+function parseRunInput(raw: string | null): unknown {
+  if (raw === null) return null;
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return null;
+  }
+}
+
 @Injectable()
 export class EngineService {
   private readonly logger = new Logger(EngineService.name);
   private readonly running = new Set<string>();
+  private readonly pauseRequested = new Set<string>();
+  private readonly cancelRequested = new Set<string>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -155,11 +357,12 @@ export class EngineService {
     private readonly runsService: RunsService,
   ) {}
 
-  async execute(runId: string, workflowId: string, input: unknown): Promise<void> {
+  /** 调度入口（可重入）：回放事件重建状态后从断点继续；run 已在执行则幂等返回 */
+  async execute(runId: string): Promise<void> {
     if (this.running.has(runId)) return;
     this.running.add(runId);
     try {
-      await this.doExecute(runId, workflowId, input);
+      await this.doExecute(runId);
     } catch (error) {
       this.logger.error(`run ${runId} 调度器异常: ${String(error)}`);
       await this.terminate(runId, 'RUN_FAILED', {
@@ -170,15 +373,122 @@ export class EngineService {
     }
   }
 
-  private async doExecute(runId: string, workflowId: string, input: unknown): Promise<void> {
-    const workflow = await this.prisma.workflow.findUnique({ where: { id: workflowId } });
-    if (!workflow) {
-      await this.terminate(runId, 'RUN_FAILED', { error: `工作流不存在: ${workflowId}` });
+  /* ---------------- 控制面：三条恢复路径 + 暂停/取消 ---------------- */
+
+  /** 主动暂停：仅设置内存标志，主循环在调度间隙停机后补发 RUN_SUSPENDED */
+  async pause(runId: string): Promise<void> {
+    await this.runsService.ensureRun(runId);
+    if (!this.running.has(runId)) throw new ConflictException('运行不在执行中，无法暂停');
+    this.pauseRequested.add(runId);
+  }
+
+  /** 取消：在跑则设标志由主循环收尾发 RUN_CANCELED；不在跑则直接追加 */
+  async cancel(runId: string): Promise<void> {
+    await this.runsService.ensureRun(runId);
+    if (this.running.has(runId)) {
+      this.cancelRequested.add(runId);
+      return;
+    }
+    const { projected } = await this.loadProjection(runId);
+    if (isTerminalRunStatus(projected.status)) {
+      throw new ConflictException('运行已处于终态，无法取消');
+    }
+    await this.appendEvent(runId, 'RUN_CANCELED', { reason: 'user' });
+    await this.runsService.syncFromProjection(runId);
+  }
+
+  /** 恢复：suspended（主动暂停 / 崩溃）→ 追加 RUN_RESUMED 后重入调度 */
+  async resume(runId: string): Promise<void> {
+    await this.runsService.ensureRun(runId);
+    const { projected } = await this.loadProjection(runId);
+    if (projected.status !== 'suspended') throw new ConflictException('仅挂起状态的运行可恢复');
+    await this.appendEvent(runId, 'RUN_RESUMED', { mode: 'resume' });
+    await this.execute(runId);
+  }
+
+  /** 失败断点重试：failed 节点重新武装后从断点继续 */
+  async retryFailed(runId: string): Promise<void> {
+    await this.runsService.ensureRun(runId);
+    const { projected } = await this.loadProjection(runId);
+    if (projected.status !== 'failed') throw new ConflictException('仅失败的运行可从断点重试');
+    await this.appendEvent(runId, 'RUN_RESUMED', { mode: 'retry_failed' });
+    await this.execute(runId);
+  }
+
+  /** Human 审批：批准则恢复执行；拒绝则直接落 NODE_FAILED + RUN_FAILED（不重入引擎） */
+  async submitHumanInput(runId: string, request: HumanInputRequest): Promise<void> {
+    await this.runsService.ensureRun(runId);
+    const { projected, events } = await this.loadProjection(runId);
+    if (projected.status !== 'waiting_human' || projected.waitingHumanNodeId === null) {
+      throw new ConflictException('运行不在等待人工输入状态');
+    }
+    const nodeId = projected.waitingHumanNodeId;
+    await this.appendEvent(runId, 'HUMAN_INPUT_RECEIVED', {
+      nodeId,
+      approved: request.approved === true,
+      input: request.input ?? null,
+    });
+    if (!request.approved) {
+      const nodeType = this.humanWaitingNodeType(events, nodeId);
+      await this.appendEvent(runId, 'NODE_FAILED', { nodeId, nodeType, error: '审批被拒绝' });
+      await this.appendEvent(runId, 'RUN_FAILED', { error: `节点 ${nodeId} 失败: 审批被拒绝` });
+      await this.runsService.syncFromProjection(runId);
+      return;
+    }
+    await this.appendEvent(runId, 'RUN_RESUMED', { mode: 'human' });
+    await this.execute(runId);
+  }
+
+  private humanWaitingNodeType(events: WorkflowEvent[], nodeId: string): string {
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      const event = events[i];
+      if (!event || event.type !== 'HUMAN_WAITING') continue;
+      const payload = (event.payload ?? {}) as Record<string, unknown>;
+      if (payload.nodeId === nodeId && typeof payload.nodeType === 'string') {
+        return payload.nodeType;
+      }
+    }
+    return '';
+  }
+
+  private async loadProjection(
+    runId: string,
+  ): Promise<{ projected: ProjectedRunState; events: WorkflowEvent[] }> {
+    const events = await this.eventStore.readEvents(runId);
+    return { projected: projectRunState(runId, events), events };
+  }
+
+  private async appendEvent(
+    runId: string,
+    type: WorkflowEventType,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    const seq = await this.eventStore.nextSeq(runId);
+    await this.eventStore.append(runId, seq, type, payload);
+  }
+
+  private async doExecute(runId: string): Promise<void> {
+    const run = await this.prisma.workflowRun.findUnique({ where: { id: runId } });
+    if (!run) {
+      this.logger.error(`run ${runId} 不存在，调度终止`);
+      return;
+    }
+
+    // 定义优先快照；快照为空（旧数据）回退当前工作流定义
+    let definitionRaw = run.definitionSnapshot;
+    if (definitionRaw === null) {
+      const workflow = await this.prisma.workflow.findUnique({
+        where: { id: run.workflowId },
+      });
+      definitionRaw = workflow?.definition ?? null;
+    }
+    if (definitionRaw === null) {
+      await this.terminate(runId, 'RUN_FAILED', { error: `工作流定义缺失: ${run.workflowId}` });
       return;
     }
     let definition: WorkflowDefinition;
     try {
-      definition = JSON.parse(workflow.definition) as WorkflowDefinition;
+      definition = JSON.parse(definitionRaw) as WorkflowDefinition;
     } catch {
       await this.terminate(runId, 'RUN_FAILED', { error: '工作流定义解析失败' });
       return;
@@ -192,10 +502,34 @@ export class EngineService {
       return;
     }
 
+    const { events, projected } = await this.loadProjection(runId);
+    if (isTerminalRunStatus(projected.status)) return; // 幂等守卫：终态运行不再调度
+
+    // 最后一次 RUN_RESUMED 的模式决定 failed 节点是否重新武装
+    let resumedMode: string | null = null;
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      const event = events[i];
+      if (event?.type === 'RUN_RESUMED') {
+        const mode = (event.payload ?? {}) as Record<string, unknown>;
+        resumedMode = typeof mode.mode === 'string' ? mode.mode : null;
+        break;
+      }
+    }
+    const rearmFailedNodes = resumedMode === 'retry_failed';
+
+    const workset = rebuildSchedulingWorkset(definition, projected, { rearmFailedNodes });
+
     let seq = await this.eventStore.nextSeq(runId);
-    const emit: EmitFn = async (type, payload) => {
-      await this.eventStore.append(runId, seq, type, payload);
+    // 序号在调用时同步分配（并行派发不重号），落库经队列串行（SSE 推送保序）
+    let appendQueue: Promise<void> = Promise.resolve();
+    const emit: EmitFn = (type, payload) => {
+      const eventSeq = seq;
       seq += 1;
+      const next = appendQueue.then(async () => {
+        await this.eventStore.append(runId, eventSeq, type, payload);
+      });
+      appendQueue = next.catch(() => undefined);
+      return next;
     };
 
     const services: NodeRuntimeServices = {
@@ -228,38 +562,33 @@ export class EngineService {
     const edges = definition.edges;
     const nodeById = new Map(nodes.map((node) => [node.id, node] as const));
 
-    const indegree = new Map<string, number>();
-    const adjacency = new Map<string, string[]>();
-    for (const node of nodes) {
-      indegree.set(node.id, 0);
-      adjacency.set(node.id, []);
-    }
-    for (const edge of edges) {
-      indegree.set(edge.target, (indegree.get(edge.target) ?? 0) + 1);
-      adjacency.get(edge.source)?.push(edge.target);
-    }
-
-    const nodeOutputs: Record<string, unknown> = {};
+    const nodeOutputs = workset.nodeOutputs;
     const variables: Record<string, unknown> = {};
     for (const variable of definition.variables ?? []) {
       variables[variable.name] = variable.default ?? null;
     }
+    const input = parseRunInput(run.input);
 
     // 终止标志：任一节点失败或挂起即停止调度新节点
     let aborted = false;
-    let suspended = false;
+    let humanSuspended = false;
+    let pauseSeen = false;
 
-    const ready: string[] = nodes
-      .filter((node) => (indegree.get(node.id) ?? 0) === 0)
-      .map((node) => node.id);
+    const stopDispatching = (): boolean =>
+      aborted ||
+      humanSuspended ||
+      this.cancelRequested.has(runId) ||
+      this.pauseRequested.has(runId);
+
+    const ready = workset.ready;
     let cursor = 0;
     const inflight = new Set<Promise<void>>();
 
     const onNodeSettled = (nodeId: string): void => {
-      for (const target of adjacency.get(nodeId) ?? []) {
-        const remaining = (indegree.get(target) ?? 0) - 1;
-        indegree.set(target, remaining);
-        if (remaining === 0 && !aborted && !suspended) ready.push(target);
+      for (const target of workset.adjacency.get(nodeId) ?? []) {
+        const remaining = (workset.indegree.get(target) ?? 0) - 1;
+        workset.indegree.set(target, remaining);
+        if (remaining === 0 && !aborted && !humanSuspended) ready.push(target);
       }
     };
 
@@ -271,22 +600,23 @@ export class EngineService {
       const context: TemplateContext = { input, variables, nodeOutputs };
 
       try {
-        const result = await executorFactory(node.type)({
+        const result = await this.runWithResilience(
           node,
-          context,
-          nextSeq: () => seq,
+          () => executorFactory(node.type)({ node, context, nextSeq: () => seq, emit }),
           emit,
-        });
+        );
 
         if (result.suspended) {
-          suspended = true;
+          humanSuspended = true;
           await emit('RUN_SUSPENDED', { nodeId, reason: 'human' });
+          await emit('CHECKPOINT_SAVED', { seq: seq - 1 });
           return;
         }
 
         nodeOutputs[nodeId] = { output: result.output };
         nodeOutputs['__last_upstream__'] = { output: result.output };
         await emit('NODE_SUCCEEDED', { nodeId, nodeType: node.type, output: result.output });
+        await emit('CHECKPOINT_SAVED', { seq: seq - 1 });
 
         if (node.type === 'condition') {
           const selected = (result.output as { selected?: string } | null)?.selected;
@@ -294,14 +624,15 @@ export class EngineService {
           // 剪枝：仅 selected 分支的出边生效，其余分支下游发 SKIPPED
           for (const edge of edges.filter((item) => item.source === nodeId)) {
             if (edge.sourceHandle === selected) {
-              const remaining = (indegree.get(edge.target) ?? 0) - 1;
-              indegree.set(edge.target, remaining);
+              const remaining = (workset.indegree.get(edge.target) ?? 0) - 1;
+              workset.indegree.set(edge.target, remaining);
               if (remaining === 0) ready.push(edge.target);
             } else {
               await emit('NODE_SKIPPED', {
                 nodeId: edge.target,
                 nodeType: nodeById.get(edge.target)?.type ?? '',
               });
+              await emit('CHECKPOINT_SAVED', { seq: seq - 1 });
               skipDownstream(edge.target);
             }
           }
@@ -313,21 +644,23 @@ export class EngineService {
         aborted = true;
         const message = error instanceof Error ? error.message : String(error);
         await emit('NODE_FAILED', { nodeId, nodeType: node.type, error: message });
+        await emit('CHECKPOINT_SAVED', { seq: seq - 1 });
         await this.terminate(runId, 'RUN_FAILED', { error: `节点 ${nodeId} 失败: ${message}` });
       }
     };
 
     const skipDownstream = (nodeId: string): void => {
-      for (const target of adjacency.get(nodeId) ?? []) {
-        const remaining = (indegree.get(target) ?? 0) - 1;
-        indegree.set(target, remaining);
+      for (const target of workset.adjacency.get(nodeId) ?? []) {
+        const remaining = (workset.indegree.get(target) ?? 0) - 1;
+        workset.indegree.set(target, remaining);
         if (remaining === 0) skipDownstream(target);
       }
     };
 
-    // 主循环：并发执行就绪节点
+    // 主循环：并发执行就绪节点；暂停/取消在调度间隙生效
     while (cursor < ready.length || inflight.size > 0) {
-      while (cursor < ready.length && !aborted && !suspended) {
+      if (this.pauseRequested.has(runId)) pauseSeen = true;
+      while (cursor < ready.length && !stopDispatching()) {
         const nodeId = ready[cursor];
         cursor += 1;
         if (nodeId === undefined) continue;
@@ -345,8 +678,26 @@ export class EngineService {
 
     await Promise.allSettled(inflight);
 
+    // 收尾优先级：取消 > 暂停 > 失败 > Human 挂起 > 历史挂起锚点 > 完成
+    const wasCanceled = this.cancelRequested.has(runId);
+    this.cancelRequested.delete(runId);
+    this.pauseRequested.delete(runId);
+
+    if (wasCanceled) {
+      await this.terminate(runId, 'RUN_CANCELED', { reason: 'user' });
+      return;
+    }
+    if (pauseSeen && !aborted && !humanSuspended) {
+      await this.terminate(runId, 'RUN_SUSPENDED', { reason: 'paused' });
+      return;
+    }
     if (aborted) return; // RUN_FAILED 已发
-    if (suspended) {
+    if (humanSuspended) {
+      await this.runsService.syncFromProjection(runId);
+      return;
+    }
+    if (workset.waitingHumanNodeId !== null) {
+      // 恢复轮次仍有未决的历史挂起锚点（如崩溃于 waiting_human 后被误重入）
       await this.runsService.syncFromProjection(runId);
       return;
     }
@@ -358,13 +709,47 @@ export class EngineService {
     await this.terminate(runId, 'RUN_COMPLETED', { output });
   }
 
+  /** 韧性包装：单次尝试超时 + 指数退避重试；Human 节点直接透传（挂起即业务语义） */
+  private async runWithResilience(
+    node: WorkflowNode,
+    attempt: () => Promise<NodeExecutionResult>,
+    emit: EmitFn,
+  ): Promise<NodeExecutionResult> {
+    if (node.type === 'human') return attempt();
+    const policy = normalizeRetryPolicy(node.retry);
+    const maxAttempts = policy?.maxAttempts ?? 1;
+    const timeoutMs =
+      typeof node.timeoutMs === 'number' && node.timeoutMs > 0 ? node.timeoutMs : null;
+
+    for (let current = 1; ; current += 1) {
+      try {
+        return await withTimeout(
+          attempt(),
+          timeoutMs,
+          `节点 ${node.id} 执行超时(${String(timeoutMs)}ms)`,
+        );
+      } catch (error) {
+        if (current >= maxAttempts || policy === null) throw error;
+        const delayMs = retryDelayMs(policy, current);
+        await emit('NODE_RETRYING', {
+          nodeId: node.id,
+          nodeType: node.type,
+          attempt: current + 1,
+          maxAttempts,
+          delayMs,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        await sleep(delayMs);
+      }
+    }
+  }
+
   private async terminate(
     runId: string,
-    type: 'RUN_COMPLETED' | 'RUN_FAILED',
+    type: 'RUN_COMPLETED' | 'RUN_FAILED' | 'RUN_CANCELED' | 'RUN_SUSPENDED',
     payload: Record<string, unknown>,
   ): Promise<void> {
-    const seq = await this.eventStore.nextSeq(runId);
-    await this.eventStore.append(runId, seq, type, payload);
+    await this.appendEvent(runId, type, payload);
     await this.runsService.syncFromProjection(runId);
   }
 }

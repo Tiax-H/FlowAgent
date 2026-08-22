@@ -10,6 +10,7 @@ interface RunRow {
   workflowId: string;
   workflowVersion: number;
   input: string | null;
+  definitionSnapshot: string | null;
   status: string;
   output: string | null;
   error: string | null;
@@ -31,8 +32,7 @@ function parseJson<T>(raw: string | null, fallback: T): T {
 export class RunsService implements OnModuleInit {
   private readonly logger = new Logger(RunsService.name);
   /** 引擎注册的启动回调（避免循环依赖由 EngineModule 桥接 set） */
-  private runStarter:
-    ((runId: string, workflowId: string, input: unknown) => Promise<void>) | null = null;
+  private runStarter: ((runId: string) => Promise<void>) | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -40,19 +40,17 @@ export class RunsService implements OnModuleInit {
   ) {}
 
   onModuleInit(): void {
-    // 进程重启时把孤儿 running 状态标记回投影真实值（恢复执行留第 8 周）
+    // 进程重启时对孤儿 run 追加崩溃挂起事件，恢复方式为用户手动调 resume API
     void this.reconcileOrphanRuns().catch((error: unknown) => {
       this.logger.warn(`孤儿 run 状态对账失败: ${String(error)}`);
     });
   }
 
-  setRunStarter(
-    starter: (runId: string, workflowId: string, input: unknown) => Promise<void>,
-  ): void {
+  setRunStarter(starter: (runId: string) => Promise<void>): void {
     this.runStarter = starter;
   }
 
-  /** 启动一次运行：落库 + 交给引擎执行 */
+  /** 启动一次运行：落库（含定义快照）+ 交给引擎执行 */
   async startRun(workflowId: string, input: unknown): Promise<string> {
     const workflow = await this.prisma.workflow.findUnique({ where: { id: workflowId } });
     if (!workflow) throw new NotFoundException(`工作流不存在: ${workflowId}`);
@@ -62,6 +60,7 @@ export class RunsService implements OnModuleInit {
         workflowId,
         workflowVersion: workflow.version,
         input: JSON.stringify(input ?? null),
+        definitionSnapshot: workflow.definition,
         status: 'pending',
       },
     });
@@ -71,9 +70,8 @@ export class RunsService implements OnModuleInit {
       input: input ?? null,
     });
 
-    const inputJson = parseJson<unknown>(run.input, null);
     if (this.runStarter) {
-      void this.runStarter(run.id, workflowId, inputJson).catch(() => undefined);
+      void this.runStarter(run.id).catch(() => undefined);
     }
     return run.id;
   }
@@ -138,12 +136,21 @@ export class RunsService implements OnModuleInit {
       .catch(() => undefined);
   }
 
+  /** 崩溃对账：DB 缓存为 pending/running 的孤儿 run，若事件流仍非终态则追加 RUN_SUSPENDED(crash) */
   private async reconcileOrphanRuns(): Promise<void> {
     const orphans = await this.prisma.workflowRun.findMany({
       where: { status: { in: ['pending', 'running'] } },
       select: { id: true },
     });
     for (const orphan of orphans) {
+      const events = await this.eventStore.readEvents(orphan.id);
+      const state = projectRunState(orphan.id, events);
+      if (state.status === 'pending' || state.status === 'running') {
+        // append-only 安全：waiting_human 被 fold 守卫保护，终态投影仅重同步不追加
+        await this.eventStore.append(orphan.id, state.lastSeq + 1, 'RUN_SUSPENDED', {
+          reason: 'crash',
+        });
+      }
       await this.syncFromProjection(orphan.id);
     }
   }
