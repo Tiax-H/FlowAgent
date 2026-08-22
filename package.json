@@ -15,6 +15,7 @@
     "lint": "eslint .",
     "format": "prettier --write \"**/*.{ts,tsx,md,json,yaml,yml}\"",
     "mcp:serve": "pnpm --filter @flowagent/bridge start",
+    "seed:demos": "pnpm --filter @flowagent/demo seed",
     "db:generate": "pnpm --filter @flowagent/server db:generate",
     "db:migrate": "pnpm --filter @flowagent/server db:migrate"
   },
