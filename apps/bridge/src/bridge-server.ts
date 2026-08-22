@@ -142,16 +142,22 @@ export async function createBridgeServer(
 
   // 动态工具：Map 永久持有 RegisteredTool（禁用而非注销，规避同名重复注册冲突）
   const tools = new Map<string, RegisteredTool>();
+  // 上次同步后处于激活态的工具名：diff 基准（Map 只禁用不删除，keys 不能反映可见工具面）
+  let activeNames: string[] = [];
 
   const syncWorkflowTools = async (): Promise<{ added: number; removed: number; total: number }> => {
     const workflows = await api.listWorkflows();
     const eligible = workflows.filter((wf) => isEligibleWorkflowToolName(workflowToolName(wf.id)));
     const nextNames = eligible.map((wf) => workflowToolName(wf.id));
-    const { toAdd, toRemove } = diffToolNames([...tools.keys()], nextNames);
+    const { toAdd, toRemove } = diffToolNames(activeNames, nextNames);
 
     for (const workflow of eligible) {
       const name = workflowToolName(workflow.id);
       if (!toAdd.includes(name)) continue;
+      if (tools.has(name)) {
+        tools.get(name)?.enable();
+        continue;
+      }
       const descriptor = describeWorkflowTool(workflow);
       const tool = server.registerTool(
         name,
@@ -166,9 +172,7 @@ export async function createBridgeServer(
       tools.set(name, tool);
     }
     for (const name of toRemove) tools.get(name)?.disable();
-    for (const name of nextNames) {
-      if (!toAdd.includes(name)) tools.get(name)?.enable();
-    }
+    activeNames = nextNames;
     if (toAdd.length > 0 || toRemove.length > 0) server.sendToolListChanged();
     return { added: toAdd.length, removed: toRemove.length, total: nextNames.length };
   };

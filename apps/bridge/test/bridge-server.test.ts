@@ -157,6 +157,26 @@ describe('bridge-server', () => {
     expect((await client.listTools()).tools.map((t) => t.name)).not.toContain('flowagent_run_wf1');
   });
 
+  it('refresh 删后重加：增量计数与通知正确', async () => {
+    const api = new FakeApi();
+    api.workflows = [{ id: 'wf1', name: 'A', description: null, version: 1 }];
+    const client = await connect(api);
+    expect((await client.listTools()).tools.map((t) => t.name)).toContain('flowagent_run_wf1');
+
+    api.workflows = [{ id: 'wf2', name: 'B', description: null, version: 1 }];
+    const removed = await callJson(client, 'flowagent_refresh_tools', {});
+    expect(removed).toEqual({ added: 1, removed: 1, total: 1 });
+    expect((await client.listTools()).tools.map((t) => t.name)).not.toContain('flowagent_run_wf1');
+
+    api.workflows = [
+      { id: 'wf1', name: 'A', description: null, version: 1 },
+      { id: 'wf2', name: 'B', description: null, version: 1 },
+    ];
+    const readded = await callJson(client, 'flowagent_refresh_tools', {});
+    expect(readded).toEqual({ added: 1, removed: 0, total: 2 });
+    expect((await client.listTools()).tools.map((t) => t.name)).toContain('flowagent_run_wf1');
+  });
+
   it('动态工具可直接运行工作流', async () => {
     const api = new FakeApi();
     api.workflows = [{ id: 'wf1', name: 'A', description: null, version: 1 }];
