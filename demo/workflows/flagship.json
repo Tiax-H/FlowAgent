@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "name": "旗舰·多模型协作流水线",
+  "description": "廉价模型规划 → 视觉/搜索 Agent 并行 → Human 审查 → 强模型汇总（PROJECT_PLAN §8 旗舰 Demo）。需先配置 openai/aggregator 两个 Provider，并在 MCP 页连接 search Server。",
+  "nodes": [
+    { "id": "start", "type": "start", "name": "开始", "position": { "x": 40, "y": 260 }, "data": {} },
+    {
+      "id": "planner",
+      "type": "agent",
+      "name": "规划（廉价模型）",
+      "position": { "x": 260, "y": 260 },
+      "timeoutMs": 60000,
+      "retry": { "maxAttempts": 2, "initialDelayMs": 500 },
+      "data": {
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "systemPrompt": "你是任务规划器。只输出严格 JSON，不加代码块围栏。",
+        "prompt": "把下面的任务拆解为两条并行支线的输入，只输出 JSON：{\"vision_brief\": \"给视觉模型的观察要点\", \"search_query\": \"给检索代理的关键词\"}\n任务：{{input.topic}}"
+      }
+    },
+    {
+      "id": "vision_agent",
+      "type": "agent",
+      "name": "视觉 Agent",
+      "position": { "x": 520, "y": 120 },
+      "timeoutMs": 120000,
+      "retry": { "maxAttempts": 2, "initialDelayMs": 500 },
+      "data": {
+        "provider": "openai",
+        "model": "gpt-4o",
+        "prompt": "基于以下规划产出视觉侧分析结论：\n{{planner.output}}"
+      }
+    },
+    {
+      "id": "search_agent",
+      "type": "agent",
+      "name": "搜索 Agent",
+      "position": { "x": 520, "y": 400 },
+      "timeoutMs": 120000,
+      "retry": { "maxAttempts": 2, "initialDelayMs": 500 },
+      "data": {
+        "provider": "aggregator",
+        "model": "deepseek-chat",
+        "maxIterations": 5,
+        "tools": [
+          { "server": "search", "tool": "web_search" },
+          { "server": "search", "tool": "fetch_page" }
+        ],
+        "prompt": "围绕规划检索资料并给出带来源的要点。规划：\n{{planner.output}}"
+      }
+    },
+    {
+      "id": "review",
+      "type": "human",
+      "name": "人工审查",
+      "position": { "x": 800, "y": 260 },
+      "data": {
+        "prompt": "视觉与搜索两条支线已完成。请在事件时间轴中核对两者产出后批准继续汇总（可在补充输入中给出修改意见），或拒绝终止。"
+      }
+    },
+    {
+      "id": "merger",
+      "type": "agent",
+      "name": "汇总（强模型）",
+      "position": { "x": 1040, "y": 260 },
+      "timeoutMs": 120000,
+      "retry": { "maxAttempts": 2, "initialDelayMs": 500 },
+      "data": {
+        "provider": "aggregator",
+        "model": "qwen-max",
+        "prompt": "汇总以下材料输出最终结论（Markdown，先给一句话答案再给依据）。视觉侧：\n{{vision_agent.output}}\n\n检索侧：\n{{search_agent.output}}\n\n审批补充：\n{{review.output}}"
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "name": "结束",
+      "position": { "x": 1280, "y": 260 },
+      "data": { "outputs": { "summary": "{{merger.output}}" } }
+    }
+  ],
+  "edges": [
+    { "id": "e1", "source": "start", "target": "planner" },
+    { "id": "e2", "source": "planner", "target": "vision_agent" },
+    { "id": "e3", "source": "planner", "target": "search_agent" },
+    { "id": "e4", "source": "vision_agent", "target": "review" },
+    { "id": "e5", "source": "search_agent", "target": "review" },
+    { "id": "e6", "source": "review", "target": "merger" },
+    { "id": "e7", "source": "merger", "target": "end" }
+  ]
+}

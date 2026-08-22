@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "name": "深度研究（Loop 多轮检索）",
+  "description": "LLM 生成问题清单 → Loop 子图逐题检索（search Server）→ 交叉汇总 → report Server 生成报告。需配置 aggregator Provider 并连接 search/report Server。",
+  "nodes": [
+    { "id": "start", "type": "start", "name": "开始", "position": { "x": 40, "y": 240 }, "data": {} },
+    {
+      "id": "questions",
+      "type": "llm",
+      "name": "生成研究问题",
+      "position": { "x": 250, "y": 240 },
+      "timeoutMs": 60000,
+      "retry": { "maxAttempts": 2, "initialDelayMs": 500 },
+      "data": {
+        "provider": "aggregator",
+        "model": "deepseek-chat",
+        "prompt": "针对主题生成 3 个可检索的研究问题。只输出严格 JSON：{\"list\": [\"问题1\", \"问题2\", \"问题3\"]}\n主题：{{input.topic}}"
+      }
+    },
+    {
+      "id": "research",
+      "type": "loop",
+      "name": "逐题检索",
+      "position": { "x": 470, "y": 240 },
+      "timeoutMs": 300000,
+      "data": {
+        "maxIterations": 5,
+        "collection": "{{questions.output.list}}",
+        "itemVariable": "question",
+        "subgraph": {
+          "nodes": [
+            {
+              "id": "lookup",
+              "type": "agent",
+              "name": "检索",
+              "position": { "x": 0, "y": 0 },
+              "data": {
+                "provider": "aggregator",
+                "model": "deepseek-chat",
+                "maxIterations": 3,
+                "tools": [{ "server": "search", "tool": "web_search" }],
+                "prompt": "围绕问题检索并给出 3 条带来源的要点。问题：{{loop.item}}"
+              }
+            }
+          ],
+          "edges": []
+        }
+      }
+    },
+    {
+      "id": "summarize",
+      "type": "llm",
+      "name": "交叉汇总",
+      "position": { "x": 690, "y": 240 },
+      "timeoutMs": 120000,
+      "retry": { "maxAttempts": 2, "initialDelayMs": 500 },
+      "data": {
+        "provider": "aggregator",
+        "model": "qwen-max",
+        "prompt": "交叉验证并汇总以下逐题检索结果，输出 Markdown 要点：\n{{research.output}}"
+      }
+    },
+    {
+      "id": "report",
+      "type": "tool",
+      "name": "生成报告",
+      "position": { "x": 910, "y": 240 },
+      "data": {
+        "server": "report",
+        "tool": "generate_report",
+        "args": {
+          "title": "深度研究报告",
+          "metadata": { "主题": "{{input.topic}}" },
+          "sections": [
+            { "heading": "核心结论", "body": "{{summarize.output}}" },
+            { "heading": "检索记录", "body": "{{research.output}}" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "name": "结束",
+      "position": { "x": 1140, "y": 240 },
+      "data": { "outputs": { "report": "{{report.output}}" } }
+    }
+  ],
+  "edges": [
+    { "id": "e1", "source": "start", "target": "questions" },
+    { "id": "e2", "source": "questions", "target": "research" },
+    { "id": "e3", "source": "research", "target": "summarize" },
+    { "id": "e4", "source": "summarize", "target": "report" },
+    { "id": "e5", "source": "report", "target": "end" }
+  ]
+}

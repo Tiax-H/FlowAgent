@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "name": "代码审查（条件 + 人工审批）",
+  "description": "LLM 分析 diff 产出风险分 → 条件分支：高风险转 Human 审批，低风险自动通过。只需配置一个 Provider（openai）。",
+  "nodes": [
+    { "id": "start", "type": "start", "name": "开始", "position": { "x": 40, "y": 240 }, "data": {} },
+    {
+      "id": "analyze",
+      "type": "llm",
+      "name": "风险分析",
+      "position": { "x": 250, "y": 240 },
+      "timeoutMs": 60000,
+      "retry": { "maxAttempts": 2, "initialDelayMs": 500 },
+      "data": {
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "prompt": "审查以下代码 diff，只输出严格 JSON：{\"risk\": 0到10的整数, \"comment\": \"一句话结论\"}\n{{input.diff}}"
+      }
+    },
+    {
+      "id": "gate",
+      "type": "condition",
+      "name": "风险分级",
+      "position": { "x": 470, "y": 240 },
+      "data": {
+        "branches": [
+          { "id": "severe", "label": "高风险", "expression": "analyze.output.risk >= 7" },
+          { "id": "auto", "label": "自动通过", "expression": "true" }
+        ]
+      }
+    },
+    {
+      "id": "human_review",
+      "type": "human",
+      "name": "人工审批",
+      "position": { "x": 690, "y": 120 },
+      "data": {
+        "prompt": "高风险变更：请在事件时间轴中核对 analyze 节点的风险结论后批准放行（补充输入可写放行理由），或拒绝。"
+      }
+    },
+    {
+      "id": "severe_result",
+      "type": "transform",
+      "name": "人工结论",
+      "position": { "x": 910, "y": 120 },
+      "data": {
+        "template": { "decision": "人工审批放行", "comment": "{{analyze.output.comment}}" }
+      }
+    },
+    {
+      "id": "auto_result",
+      "type": "transform",
+      "name": "自动结论",
+      "position": { "x": 910, "y": 360 },
+      "data": {
+        "template": { "decision": "自动通过", "comment": "{{analyze.output.comment}}" }
+      }
+    },
+    { "id": "end", "type": "end", "name": "结束", "position": { "x": 1140, "y": 240 }, "data": {} }
+  ],
+  "edges": [
+    { "id": "e1", "source": "start", "target": "analyze" },
+    { "id": "e2", "source": "analyze", "target": "gate" },
+    { "id": "e3", "source": "gate", "target": "human_review", "sourceHandle": "severe" },
+    { "id": "e4", "source": "human_review", "target": "severe_result" },
+    { "id": "e5", "source": "gate", "target": "auto_result", "sourceHandle": "auto" },
+    { "id": "e6", "source": "severe_result", "target": "end" },
+    { "id": "e7", "source": "auto_result", "target": "end" }
+  ]
+}

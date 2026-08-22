@@ -1,0 +1,16 @@
+{
+  "name": "@flowagent/demo",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "seed": "node seed.mjs"
+  },
+  "devDependencies": {
+    "@flowagent/shared": "workspace:*",
+    "typescript": "^5.5.4",
+    "vitest": "^2.1.8"
+  }
+}
