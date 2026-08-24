@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { mcpApi, type McpServer, type McpTool } from '../api/mcp';
+import { Button, CopyButton, EmptyState, LoadingRows, Modal } from '../components/ui';
 
 const STATUS_STYLES: Record<string, string> = {
   connected: 'bg-green-100 text-green-700',
@@ -16,9 +17,35 @@ const STATUS_LABELS: Record<string, string> = {
   disconnected: '未连接',
 };
 
+/** 从工具的 inputSchema 提取人类可读的参数提示（属性名: 类型，必填标 *） */
+function describeInputSchema(schema: unknown): string | null {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return null;
+  const record = schema as Record<string, unknown>;
+  if (record.type !== 'object' || !record.properties || typeof record.properties !== 'object') {
+    return null;
+  }
+  const required =
+    Array.isArray(record.required) &&
+    record.required.every((item) => typeof item === 'string')
+      ? (record.required as string[])
+      : [];
+  const lines = Object.entries(record.properties as Record<string, unknown>).map(([name, raw]) => {
+    const type = raw && typeof raw === 'object' && typeof (raw as Record<string, unknown>).type === 'string'
+      ? ((raw as Record<string, unknown>).type as string)
+      : 'any';
+    const description =
+      raw && typeof raw === 'object' && typeof (raw as Record<string, unknown>).description === 'string'
+        ? ` ${(raw as Record<string, unknown>).description as string}`
+        : '';
+    return `${required.includes(name) ? '*' : ''}${name}: ${type} —${description}`;
+  });
+  return lines.length > 0 ? lines.join('\n') : null;
+}
+
 export function McpServersPage() {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [tools, setTools] = useState<McpTool[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [transport, setTransport] = useState<'stdio' | 'http'>('stdio');
@@ -26,10 +53,13 @@ export function McpServersPage() {
   const [command, setCommand] = useState('node');
   const [args, setArgs] = useState('');
   const [url, setUrl] = useState('');
+  /** 展开查看完整连接错误信息的 server id 集合 */
+  const [expandedErrors, setExpandedErrors] = useState<Set<string>>(new Set());
 
   const [invokeTarget, setInvokeTarget] = useState<McpTool | null>(null);
   const [invokeArgs, setInvokeArgs] = useState('{}');
   const [invokeResult, setInvokeResult] = useState<string | null>(null);
+  const [invokeError, setInvokeError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -39,6 +69,8 @@ export function McpServersPage() {
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setLoaded(true);
     }
   }, []);
 
@@ -96,12 +128,20 @@ export function McpServersPage() {
     if (!invokeTarget) return;
     setBusy(true);
     setInvokeResult(null);
+    setInvokeError(null);
+    let parsed: Record<string, unknown>;
     try {
-      const parsed = JSON.parse(invokeArgs) as Record<string, unknown>;
+      parsed = JSON.parse(invokeArgs) as Record<string, unknown>;
+    } catch (cause) {
+      setInvokeError(`参数不是合法 JSON：${cause instanceof Error ? cause.message : String(cause)}`);
+      setBusy(false);
+      return;
+    }
+    try {
       const response = await mcpApi.invokeTool(invokeTarget.serverName, invokeTarget.name, parsed);
       setInvokeResult(JSON.stringify(response.result, null, 2));
     } catch (cause) {
-      setInvokeResult(`调用失败：${cause instanceof Error ? cause.message : String(cause)}`);
+      setInvokeError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBusy(false);
     }
@@ -127,33 +167,41 @@ export function McpServersPage() {
           ))}
         </div>
         {transport === 'stdio' ? (
-          <div className="grid grid-cols-[1fr_1fr_2fr_auto] gap-2">
-            <input
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="名称 (search)"
-              className="rounded border border-neutral-300 px-2 py-1.5 text-sm"
-            />
-            <input
-              value={command}
-              onChange={(event) => setCommand(event.target.value)}
-              placeholder="命令 (node)"
-              className="rounded border border-neutral-300 px-2 py-1.5 text-sm"
-            />
-            <input
-              value={args}
-              onChange={(event) => setArgs(event.target.value)}
-              placeholder="参数（绝对路径，如 /abs/path/servers/search/dist/index.js）"
-              className="rounded border border-neutral-300 px-2 py-1.5 text-sm"
-            />
-            <button
-              type="button"
-              disabled={busy || name.trim().length === 0 || command.trim().length === 0}
-              onClick={() => void handleCreate()}
-              className="rounded bg-neutral-900 px-3 py-1.5 text-sm text-white disabled:opacity-40"
-            >
-              添加并连接
-            </button>
+          <div>
+            <div className="grid grid-cols-[1fr_1fr_2fr_auto] gap-2">
+              <input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="名称 (search)"
+                className="rounded border border-neutral-300 px-2 py-1.5 text-sm"
+              />
+              <input
+                value={command}
+                onChange={(event) => setCommand(event.target.value)}
+                placeholder="命令 (node)"
+                className="rounded border border-neutral-300 px-2 py-1.5 text-sm"
+              />
+              <input
+                value={args}
+                onChange={(event) => setArgs(event.target.value)}
+                placeholder="Server 脚本的绝对路径（空格分隔多个参数）"
+                className="rounded border border-neutral-300 px-2 py-1.5 text-sm"
+              />
+              <Button variant="primary" disabled={busy || name.trim().length === 0 || command.trim().length === 0} onClick={() => void handleCreate()}>
+                {busy ? '连接中…' : '添加并连接'}
+              </Button>
+            </div>
+            <p className="mt-2 text-xs leading-relaxed text-neutral-400">
+              参数必须是<b>绝对路径</b>（stdio 子进程按 server 进程的工作目录解析相对路径）。项目自带的 demo Server 在构建后位于：
+              <code className="mx-1 rounded bg-neutral-100 px-1">servers/search/dist/index.js</code>
+              <code className="mx-1 rounded bg-neutral-100 px-1">servers/sandbox/dist/index.js</code>
+              <code className="mx-1 rounded bg-neutral-100 px-1">servers/report/dist/index.js</code>
+              ，前面拼上仓库的绝对路径即可。示例：
+              <CopyButton
+                text="node F:\\Project\\FlowAgent\\servers\\search\\dist\\index.js"
+                label="复制 search 示例"
+              />
+            </p>
           </div>
         ) : (
           <div className="grid grid-cols-[1fr_2fr_auto] gap-2">
@@ -169,20 +217,27 @@ export function McpServersPage() {
               placeholder="MCP 端点 (http://localhost:3100/mcp)"
               className="rounded border border-neutral-300 px-2 py-1.5 text-sm"
             />
-            <button
-              type="button"
-              disabled={busy || name.trim().length === 0 || url.trim().length === 0}
-              onClick={() => void handleCreate()}
-              className="rounded bg-neutral-900 px-3 py-1.5 text-sm text-white disabled:opacity-40"
-            >
-              添加并连接
-            </button>
+            <Button variant="primary" disabled={busy || name.trim().length === 0 || url.trim().length === 0} onClick={() => void handleCreate()}>
+              {busy ? '连接中…' : '添加并连接'}
+            </Button>
           </div>
         )}
       </section>
 
       <section className="space-y-3">
-        {servers.length === 0 && <p className="text-sm text-neutral-400">暂无 Server</p>}
+        {!loaded && servers.length === 0 && <LoadingRows rows={2} />}
+        {loaded && servers.length === 0 && (
+          <EmptyState
+            title="还没有注册任何 MCP Server"
+            description={
+              <>
+                MCP Server 提供工作流可调用的工具（搜索、代码执行、报告生成等）。
+                先在上方添加一个，或复制示例命令体验自带的 demo Server。
+                没有 Server 也可以先创建纯 LLM 工作流。
+              </>
+            }
+          />
+        )}
         {servers.map((server) => (
           <article key={server.id} className="rounded-lg border border-neutral-200 bg-white p-4">
             <header className="flex items-center gap-3">
@@ -223,9 +278,29 @@ export function McpServersPage() {
               </span>
             </header>
             {server.statusMessage && (
-              <p className="mt-2 truncate text-xs text-red-500" title={server.statusMessage}>
-                {server.statusMessage}
-              </p>
+              <div className="mt-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setExpandedErrors((previous) => {
+                      const next = new Set(previous);
+                      if (next.has(server.id)) next.delete(server.id);
+                      else next.add(server.id);
+                      return next;
+                    })
+                  }
+                  className={`text-left text-xs text-red-500 ${expandedErrors.has(server.id) ? '' : 'truncate block max-w-full'}`}
+                >
+                  {expandedErrors.has(server.id)
+                    ? server.statusMessage
+                    : server.statusMessage.slice(0, 120)}
+                  {(server.statusMessage.length > 120 || expandedErrors.has(server.id)) && (
+                    <span className="ml-1 text-neutral-400">
+                      {expandedErrors.has(server.id) ? '[收起]' : '…[展开]'}
+                    </span>
+                  )}
+                </button>
+              </div>
             )}
             <ul className="mt-3 space-y-1">
               {(toolsByServer.get(server.id) ?? []).map((tool) => (
@@ -253,39 +328,46 @@ export function McpServersPage() {
       </section>
 
       {invokeTarget && (
-        <section className="fixed inset-0 flex items-center justify-center bg-black/30 p-4">
-          <div className="w-full max-w-lg space-y-3 rounded-lg bg-white p-4 shadow-lg">
-            <h3 className="font-mono text-sm font-semibold">{invokeTarget.qualifiedName}</h3>
-            <textarea
-              value={invokeArgs}
-              onChange={(event) => setInvokeArgs(event.target.value)}
-              rows={4}
-              className="w-full rounded border border-neutral-300 p-2 font-mono text-xs"
-            />
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setInvokeTarget(null)}
-                className="rounded border border-neutral-300 px-3 py-1.5 text-sm"
-              >
-                关闭
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void handleInvoke()}
-                className="rounded bg-neutral-900 px-3 py-1.5 text-sm text-white disabled:opacity-40"
-              >
-                调用
-              </button>
-            </div>
-            {invokeResult && (
-              <pre className="max-h-60 overflow-auto rounded bg-neutral-50 p-2 text-xs">
-                {invokeResult}
+        <Modal title={<code>{invokeTarget.qualifiedName}</code>} onClose={() => setInvokeTarget(null)} width="w-[36rem]">
+          {(() => {
+            const hint = describeInputSchema(invokeTarget.inputSchema);
+            return hint ? (
+              <pre className="mb-2 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-neutral-50 p-2 text-xs text-neutral-600">
+                {`参数说明（* 为必填）：\n${hint}`}
               </pre>
-            )}
+            ) : (
+              <p className="mb-2 text-xs text-neutral-400">该工具未提供参数说明，请参考其文档填写 JSON 对象。</p>
+            );
+          })()}
+          <textarea
+            value={invokeArgs}
+            onChange={(event) => setInvokeArgs(event.target.value)}
+            rows={4}
+            placeholder='{ "query": "durable execution" }'
+            className="w-full rounded border border-neutral-300 p-2 font-mono text-xs focus:border-neutral-500 focus:outline-none"
+          />
+          {invokeError && (
+            <p className="mt-2 rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-600">
+              {invokeError}
+            </p>
+          )}
+          <div className="mt-3 flex items-center gap-2">
+            <CopyButton text={invokeArgs} label="复制参数" />
+            {invokeResult && <CopyButton text={invokeResult} label="复制结果" />}
+            <span className="flex-1" />
+            <Button variant="secondary" onClick={() => setInvokeTarget(null)}>
+              关闭
+            </Button>
+            <Button variant="primary" disabled={busy} onClick={() => void handleInvoke()}>
+              {busy ? '调用中…' : '调用'}
+            </Button>
           </div>
-        </section>
+          {invokeResult && (
+            <pre className="mt-3 max-h-60 overflow-auto rounded bg-neutral-50 p-2 text-xs">
+              {invokeResult}
+            </pre>
+          )}
+        </Modal>
       )}
     </div>
   );

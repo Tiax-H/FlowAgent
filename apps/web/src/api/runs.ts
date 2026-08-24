@@ -3,10 +3,18 @@ import type { HumanInputRequest, RunSummary, WorkflowEvent } from '@flowagent/sh
 import type { WorkflowRecord } from '../workflow/types';
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    headers: { 'Content-Type': 'application/json' },
-    ...init,
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: { 'Content-Type': 'application/json' },
+      ...init,
+    });
+  } catch (cause) {
+    if (cause instanceof TypeError) {
+      throw new Error('无法连接服务器，请确认 server 已启动（pnpm dev）');
+    }
+    throw cause;
+  }
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as { message?: string } | null;
     throw new Error(body?.message ?? `HTTP ${response.status}`);

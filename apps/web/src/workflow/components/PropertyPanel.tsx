@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Node } from '@xyflow/react';
+import { useReactFlow, type Node } from '@xyflow/react';
 import type {
   AgentNodeData,
   ConditionBranch,
@@ -13,15 +13,25 @@ import type {
   StartNodeData,
   ToolNodeData,
   TransformNodeData,
+  WorkflowSubgraph,
 } from '@flowagent/shared';
 
 import { mcpApi, type McpTool } from '../../api/mcp';
+import { providersApi, type ProviderInfo } from '../../api/providers';
 import { NODE_TYPE_META } from '../types';
+
+/** 同画布其他节点的摘要，供「插入引用」生成 {{节点id.output}} */
+export interface PeerNode {
+  id: string;
+  name?: string;
+}
 
 interface PropertyPanelProps {
   node: Node;
   onChange: (patch: Record<string, unknown>) => void;
   onDelete: () => void;
+  /** 同画布其他节点摘要；缺省时自动从 ReactFlow 实例读取（无 Provider 环境则降级为空列表） */
+  peerNodes?: PeerNode[];
 }
 
 interface NodeDataShape extends Record<string, unknown> {
@@ -30,12 +40,38 @@ interface NodeDataShape extends Record<string, unknown> {
   __nodeExtras?: { timeoutMs?: number; retry?: { maxAttempts?: number } };
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+/** 模板语法的固定帮助文案 */
+const TEMPLATE_HELP =
+  '模板语法：{{input.xxx}} 引用运行输入，{{节点id.output}} 引用上游输出';
+
+/** Provider / 模型下拉中代表“切回手动输入”的哨兵值 */
+const MANUAL_OPTION = '__manual__';
+
+function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <label className="block space-y-1">
-      <span className="text-xs font-medium text-neutral-500">{label}</span>
+      <span className="text-xs font-medium text-neutral-500">
+        {label}
+        {hint && <span className="ml-1 font-normal text-neutral-400">{hint}</span>}
+      </span>
       {children}
     </label>
+  );
+}
+
+/**
+ * 与 Field 等价的区块容器，但外层用 div：内部含按钮/多控件时，
+ * 避免 label 的隐式焦点转发把点击劫持到第一个输入框。
+ */
+function FieldBlock({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1">
+      <span className="block text-xs font-medium text-neutral-500">
+        {label}
+        {hint && <span className="ml-1 font-normal text-neutral-400">{hint}</span>}
+      </span>
+      {children}
+    </div>
   );
 }
 
@@ -133,9 +169,12 @@ function TextArea(props: {
   rows?: number;
   placeholder?: string;
   mono?: boolean;
+  /** 回调 ref：供调用方拿到元素以读取/恢复光标位置 */
+  inputRef?: (element: HTMLTextAreaElement | null) => void;
 }) {
   return (
     <textarea
+      ref={props.inputRef}
       value={props.value}
       onChange={(event) => props.onChange(event.target.value)}
       rows={props.rows ?? 3}
@@ -145,17 +184,83 @@ function TextArea(props: {
   );
 }
 
+/** 「插入引用」按钮行：列出同画布其他节点，点击把对应模板片段交给 onInsert */
+function TemplateInsertRow({ peers, onInsert }: { peers: PeerNode[]; onInsert: (snippet: string) => void }) {
+  if (peers.length === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      <span className="text-[10px] text-neutral-400">插入引用：</span>
+      {peers.map((peer) => (
+        <button
+          key={peer.id}
+          type="button"
+          title={`插入 {{${peer.id}.output}}`}
+          onClick={() => onInsert(`{{${peer.id}.output}}`)}
+          className="max-w-28 truncate rounded border border-neutral-200 bg-neutral-50 px-1.5 py-0.5 text-[10px] text-neutral-600 hover:bg-neutral-100"
+        >
+          {peer.name || peer.id}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * 提示词类多行字段：「插入引用」按钮行 + 文本域（光标处追加）+ 模板语法帮助。
+ * peers 为空时按钮行自动省略，帮助文案保留。
+ */
+function PromptField({
+  label,
+  hint,
+  value,
+  onChange,
+  peers,
+  rows,
+}: {
+  label: string;
+  hint?: string;
+  value: string;
+  onChange: (value: string) => void;
+  peers: PeerNode[];
+  rows?: number;
+}) {
+  const [textAreaEl, setTextAreaEl] = useState<HTMLTextAreaElement | null>(null);
+
+  const insertSnippet = (snippet: string): void => {
+    const el = textAreaEl;
+    const start = Math.min(el?.selectionStart ?? value.length, value.length);
+    const end = Math.min(el?.selectionEnd ?? start, value.length);
+    onChange(value.slice(0, start) + snippet + value.slice(end));
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(start + snippet.length, start + snippet.length);
+    });
+  };
+
+  return (
+    <FieldBlock label={label} hint={hint}>
+      <TemplateInsertRow peers={peers} onInsert={insertSnippet} />
+      <TextArea value={value} onChange={onChange} rows={rows} inputRef={setTextAreaEl} />
+      <p className="text-[10px] text-neutral-400">{TEMPLATE_HELP}</p>
+    </FieldBlock>
+  );
+}
+
 /** 键→模板 映射编辑（End.outputs / Transform.template 共用） */
 function TemplateMapEditor({
   value,
   onChange,
   keyPlaceholder,
+  peers,
 }: {
   value: Record<string, string>;
   onChange: (value: Record<string, string>) => void;
   keyPlaceholder: string;
+  peers?: PeerNode[];
 }) {
   const entries = Object.entries(value);
+  /** 最近获得焦点的模板输入框：插入引用的落点 */
+  const focusedRef = useRef<{ el: HTMLInputElement; index: number } | null>(null);
 
   /** 保序更新：按原顺序重建，避免重命名字段时行跳位 */
   const rebuild = (updated: Array<[string, string]>): Record<string, string> => {
@@ -167,8 +272,30 @@ function TemplateMapEditor({
     return next;
   };
 
+  const insertSnippet = (snippet: string): void => {
+    const target = focusedRef.current;
+    const entry = target ? entries[target.index] : undefined;
+    if (!target || !entry) return;
+    const [key, template] = entry;
+    const el = target.el;
+    const start = Math.min(el.selectionStart ?? template.length, template.length);
+    const end = Math.min(el.selectionEnd ?? start, template.length);
+    onChange(
+      rebuild(
+        entries.map((item, i) =>
+          i === target.index ? ([key, template.slice(0, start) + snippet + template.slice(end)] as [string, string]) : item,
+        ),
+      ),
+    );
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(start + snippet.length, start + snippet.length);
+    });
+  };
+
   return (
     <div className="space-y-1">
+      {peers && peers.length > 0 && <TemplateInsertRow peers={peers} onInsert={insertSnippet} />}
       {entries.map(([key, template], index) => (
         <div key={index} className="flex gap-1">
           <input
@@ -184,6 +311,9 @@ function TemplateMapEditor({
           />
           <input
             value={template}
+            onFocus={(event) => {
+              focusedRef.current = { el: event.currentTarget, index };
+            }}
             onChange={(event) => {
               const next = { ...value };
               next[key] = event.target.value;
@@ -215,6 +345,305 @@ function TemplateMapEditor({
       >
         + 添加字段
       </button>
+      <p className="text-[10px] text-neutral-400">{TEMPLATE_HELP}</p>
+    </div>
+  );
+}
+
+/** Provider 选择：有配置时走下拉（末项可切回手输），未配置项给出橙色警示 */
+function ProviderPicker({
+  value,
+  onChange,
+  providers,
+  placeholder,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  providers: ProviderInfo[];
+  placeholder?: string;
+}) {
+  const [manualMode, setManualMode] = useState(false);
+  const names = providers.map((provider) => provider.name);
+
+  if (names.length === 0) {
+    // Provider 配置为空或加载失败：静默退化为自由输入
+    return <TextInput value={value} onChange={onChange} placeholder={placeholder ?? 'openai / aggregator'} />;
+  }
+
+  const known = names.includes(value);
+  const showInput = manualMode || !known;
+
+  return (
+    <div className="space-y-1">
+      <select
+        value={!manualMode && known ? value : MANUAL_OPTION}
+        onChange={(event) => {
+          const next = event.target.value;
+          if (next === MANUAL_OPTION) {
+            setManualMode(true);
+            return;
+          }
+          setManualMode(false);
+          onChange(next);
+        }}
+        className={inputClass}
+      >
+        {names.map((name) => (
+          <option key={name} value={name}>
+            {name}
+          </option>
+        ))}
+        <option value={MANUAL_OPTION}>手动输入…</option>
+      </select>
+      {showInput && (
+        <>
+          <TextInput value={value} onChange={onChange} placeholder={placeholder ?? 'openai / aggregator'} />
+          {!known && value.trim() !== '' && (
+            <p className="text-[10px] text-amber-600">未配置的 Provider，保存后运行会失败</p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/** 模型选择：所选 Provider 有模型列表时走下拉 + “自定义…”，否则保持手输 */
+function ModelPicker({
+  provider,
+  value,
+  onChange,
+  providers,
+}: {
+  provider: string;
+  value: string;
+  onChange: (value: string) => void;
+  providers: ProviderInfo[];
+}) {
+  const [manualMode, setManualMode] = useState(false);
+  const models = providers.find((item) => item.name === provider)?.models ?? [];
+
+  if (models.length === 0) {
+    return <TextInput value={value} onChange={onChange} placeholder="deepseek-chat" />;
+  }
+
+  const known = models.includes(value);
+  const showInput = manualMode || !known;
+
+  return (
+    <div className="space-y-1">
+      <select
+        value={!manualMode && known ? value : MANUAL_OPTION}
+        onChange={(event) => {
+          const next = event.target.value;
+          if (next === MANUAL_OPTION) {
+            setManualMode(true);
+            return;
+          }
+          setManualMode(false);
+          onChange(next);
+        }}
+        className={inputClass}
+      >
+        {models.map((model) => (
+          <option key={model} value={model}>
+            {model}
+          </option>
+        ))}
+        <option value={MANUAL_OPTION}>自定义…</option>
+      </select>
+      {showInput && <TextInput value={value} onChange={onChange} placeholder={models[0] ?? 'deepseek-chat'} />}
+    </div>
+  );
+}
+
+/* ---------- Tool 参数表单化：从 MCP inputSchema 收窄出可渲染的字段 ---------- */
+
+interface ParsedToolProperty {
+  name: string;
+  type: 'string' | 'number' | 'boolean';
+  description?: string;
+}
+
+interface ParsedToolSchema {
+  properties: ParsedToolProperty[];
+  required: string[];
+}
+
+/** 名字含这些关键词的 string 参数按长文本渲染（textarea） */
+const LONG_TEXT_NAME_PATTERN = /diff|code|text|content/i;
+/** description 明确提示长内容的也算长文本 */
+const LONG_TEXT_DESC_PATTERN = /long|multiline|multi-line|长文本|多行|较长/i;
+
+/** 把 unknown 形态的 JSON Schema 安全收窄为可表单化的字段列表；不支持/为空时返回 null */
+function parseToolSchema(inputSchema: unknown): ParsedToolSchema | null {
+  if (typeof inputSchema !== 'object' || inputSchema === null) return null;
+  const record = inputSchema as Record<string, unknown>;
+  const rawProperties = record['properties'];
+  if (typeof rawProperties !== 'object' || rawProperties === null || Array.isArray(rawProperties)) return null;
+
+  const requiredRaw = record['required'];
+  const required = Array.isArray(requiredRaw)
+    ? requiredRaw.filter((item): item is string => typeof item === 'string')
+    : [];
+
+  const properties: ParsedToolProperty[] = [];
+  for (const [name, raw] of Object.entries(rawProperties as Record<string, unknown>)) {
+    if (typeof raw !== 'object' || raw === null) continue;
+    const info = raw as Record<string, unknown>;
+    const type = info['type'];
+    if (type !== 'string' && type !== 'number' && type !== 'boolean') continue;
+    properties.push({
+      name,
+      type,
+      description: typeof info['description'] === 'string' ? info['description'] : undefined,
+    });
+  }
+  if (properties.length === 0) return null;
+  return { properties, required };
+}
+
+function ToolArgsForm({
+  args,
+  schema,
+  onChange,
+}: {
+  args: Record<string, unknown>;
+  schema: ParsedToolSchema;
+  onChange: (args: Record<string, unknown>) => void;
+}) {
+  const setArg = (name: string, value: unknown): void => {
+    const next: Record<string, unknown> = { ...args };
+    if (value === undefined) {
+      delete next[name];
+    } else {
+      next[name] = value;
+    }
+    onChange(next);
+  };
+
+  return (
+    <div className="space-y-2 rounded border border-neutral-200 p-2">
+      {schema.properties.map((property) => {
+        const required = schema.required.includes(property.name);
+        const current = args[property.name];
+        const isLongText =
+          property.type === 'string' &&
+          (LONG_TEXT_NAME_PATTERN.test(property.name) ||
+            (property.description !== undefined && LONG_TEXT_DESC_PATTERN.test(property.description)));
+        return (
+          <div key={property.name}>
+            <div className="mb-0.5 flex items-baseline gap-1">
+              <span className="text-xs font-medium text-neutral-500">
+                {required && <span className="mr-0.5 text-red-500">*</span>}
+                {property.name}
+              </span>
+              <span className="text-[10px] text-neutral-400">{property.type}</span>
+            </div>
+            {property.type === 'boolean' ? (
+              <label className="flex items-center gap-2 text-xs text-neutral-600">
+                <input
+                  type="checkbox"
+                  checked={current === true}
+                  onChange={(event) => setArg(property.name, event.target.checked)}
+                />
+                {current === undefined ? '未设置' : current === true ? 'true' : 'false'}
+              </label>
+            ) : property.type === 'number' ? (
+              <NumberInput
+                value={typeof current === 'number' ? current : undefined}
+                onChange={(value) => setArg(property.name, value)}
+              />
+            ) : isLongText ? (
+              <TextArea
+                value={typeof current === 'string' ? current : ''}
+                onChange={(value) => setArg(property.name, value)}
+                rows={3}
+                mono
+              />
+            ) : (
+              <TextInput
+                value={typeof current === 'string' ? current : ''}
+                onChange={(value) => setArg(property.name, value)}
+                mono
+              />
+            )}
+            {property.description && <p className="mt-0.5 text-[10px] text-neutral-400">{property.description}</p>}
+          </div>
+        );
+      })}
+      <p className="text-[10px] text-neutral-400">参数值支持模板：{'{{input.xxx}}'} 与 {'{{节点id.output}}'}</p>
+    </div>
+  );
+}
+
+function ToolForm({
+  data,
+  onChange,
+  tools,
+  toolsError,
+}: {
+  data: ToolNodeData;
+  /** 与面板同宽度的 patch 通道：JsonField 提交的原始 JSON 需原样透传（与既有行为一致） */
+  onChange: (patch: Record<string, unknown>) => void;
+  tools: McpTool[];
+  toolsError: string | null;
+}) {
+  const qualifiedName = `${data.server}:${data.tool}`;
+  const selectedTool = tools.find((tool) => tool.qualifiedName === qualifiedName);
+  const schema = selectedTool ? parseToolSchema(selectedTool.inputSchema) : null;
+
+  return (
+    <div className="space-y-3">
+      <Field label="选择 MCP 工具" hint="直调模式：执行到该节点时调用一次">
+        {tools.length === 0 ? (
+          toolsError ? (<p className="text-xs text-red-500">工具列表加载失败：{toolsError}</p>) : (<p className="text-xs text-neutral-400">注册表为空，请先在 MCP Servers 页添加</p>)
+        ) : (
+          <select
+            value={`${data.server ?? ''}:${data.tool ?? ''}`}
+            onChange={(event) => {
+              const [server, tool] = event.target.value.split(':');
+              onChange({ server: server ?? '', tool: tool ?? '' });
+            }}
+            className={inputClass}
+          >
+            <option value="">选择工具…</option>
+            {tools.map((tool) => (
+              <option key={tool.qualifiedName} value={tool.qualifiedName}>
+                {tool.qualifiedName}
+              </option>
+            ))}
+          </select>
+        )}
+      </Field>
+      {schema ? (
+        <FieldBlock label="参数" hint="标 * 为必填，按工具 Schema 自动生成">
+          <ToolArgsForm args={data.args ?? {}} schema={schema} onChange={(args) => onChange({ args })} />
+          <details className="rounded border border-neutral-200 p-2">
+            <summary className="cursor-pointer text-xs font-medium text-neutral-500">
+              高级：编辑原始 JSON
+            </summary>
+            <div className="mt-2">
+              <JsonField value={data.args ?? {}} onChange={(args) => onChange({ args })} rows={4} />
+            </div>
+          </details>
+        </FieldBlock>
+      ) : (
+        <Field label="参数 JSON（值支持模板）">
+          <JsonField
+            value={data.args ?? {}}
+            onChange={(args) => onChange({ args })}
+            rows={4}
+            placeholder='{"query": "{{input.query}}"}'
+          />
+        </Field>
+      )}
+      <Field label="超时 (ms)">
+        <NumberInput
+          value={data.timeoutMs}
+          onChange={(timeoutMs) => onChange({ timeoutMs })}
+          placeholder="30000"
+        />
+      </Field>
     </div>
   );
 }
@@ -224,39 +653,49 @@ function AgentForm({
   onChange,
   tools,
   toolsError,
+  providers,
+  peers,
 }: {
   data: AgentNodeData;
   onChange: (patch: Partial<AgentNodeData>) => void;
   tools: McpTool[];
   toolsError: string | null;
+  providers: ProviderInfo[];
+  peers: PeerNode[];
 }) {
   const bound: McpToolBinding[] = data.tools ?? [];
   return (
     <div className="space-y-3">
-      <Field label="Provider">
-        <TextInput
+      <Field label="Provider" hint="LLM 服务方，来自系统 Provider 配置">
+        <ProviderPicker
           value={data.provider ?? ''}
           onChange={(provider) => onChange({ provider })}
+          providers={providers}
           placeholder="openai / aggregator"
         />
       </Field>
-      <Field label="模型">
-        <TextInput
+      <Field label="模型" hint="所选 Provider 支持的模型名">
+        <ModelPicker
+          provider={data.provider ?? ''}
           value={data.model ?? ''}
           onChange={(model) => onChange({ model })}
-          placeholder="deepseek-chat"
+          providers={providers}
         />
       </Field>
-      <Field label="System Prompt">
+      <Field label="System Prompt" hint="设定角色与行为约束">
         <TextArea
           value={data.systemPrompt ?? ''}
           onChange={(systemPrompt) => onChange({ systemPrompt })}
         />
       </Field>
-      <Field label="提示词（支持 {{node.output}} 模板）">
-        <TextArea value={data.prompt ?? ''} onChange={(prompt) => onChange({ prompt })} />
-      </Field>
-      <Field label="绑定 MCP 工具">
+      <PromptField
+        label="提示词"
+        hint="运行时注入上游输出"
+        value={data.prompt ?? ''}
+        onChange={(prompt) => onChange({ prompt })}
+        peers={peers}
+      />
+      <Field label="绑定 MCP 工具" hint="绑定后，模型会在对话中自主决定何时调用">
         {tools.length === 0 ? (
           toolsError ? (<p className="text-xs text-red-500">工具列表加载失败：{toolsError}</p>) : (<p className="text-xs text-neutral-400">注册表为空，请先在 MCP Servers 页添加</p>)
         ) : (
@@ -285,14 +724,14 @@ function AgentForm({
         )}
       </Field>
       <div className="grid grid-cols-2 gap-2">
-        <Field label="最大轮数">
+        <Field label="最大轮数" hint="ReAct 循环上限">
           <NumberInput
             value={data.maxIterations}
             onChange={(maxIterations) => onChange({ maxIterations })}
             placeholder="8"
           />
         </Field>
-        <Field label="Temperature">
+        <Field label="Temperature" hint="越高越随机">
           <NumberInput
             value={data.temperature}
             onChange={(temperature) => onChange({ temperature })}
@@ -300,6 +739,53 @@ function AgentForm({
           />
         </Field>
       </div>
+    </div>
+  );
+}
+
+function LlmForm({
+  data,
+  onChange,
+  providers,
+  peers,
+}: {
+  data: LlmNodeData;
+  onChange: (patch: Partial<LlmNodeData>) => void;
+  providers: ProviderInfo[];
+  peers: PeerNode[];
+}) {
+  return (
+    <div className="space-y-3">
+      <Field label="Provider" hint="LLM 服务方，来自系统 Provider 配置">
+        <ProviderPicker
+          value={data.provider ?? ''}
+          onChange={(provider) => onChange({ provider })}
+          providers={providers}
+          placeholder="openai / aggregator"
+        />
+      </Field>
+      <Field label="模型" hint="所选 Provider 支持的模型名">
+        <ModelPicker
+          provider={data.provider ?? ''}
+          value={data.model ?? ''}
+          onChange={(model) => onChange({ model })}
+          providers={providers}
+        />
+      </Field>
+      <PromptField
+        label="提示词"
+        hint="运行时注入上游输出"
+        value={data.prompt ?? ''}
+        onChange={(prompt) => onChange({ prompt })}
+        peers={peers}
+      />
+      <Field label="Temperature" hint="采样温度，越高越随机">
+        <NumberInput
+          value={data.temperature}
+          onChange={(temperature) => onChange({ temperature })}
+          placeholder="0.7"
+        />
+      </Field>
     </div>
   );
 }
@@ -355,6 +841,9 @@ function ConditionForm({
             placeholder="表达式，如 result.score > 0.5（默认分支填 true）"
             className="w-full rounded border border-neutral-300 px-2 py-1 font-mono text-xs"
           />
+          <p className="text-[10px] leading-relaxed text-neutral-400">
+            {'可用变量：input.xxx（运行输入）与各上游节点 节点id.output；比较 > >= < <= == !=，逻辑 && || !；最后一个恒真分支作为默认路径。'}
+          </p>
         </div>
       ))}
       <button
@@ -372,11 +861,29 @@ function ConditionForm({
   );
 }
 
-export function PropertyPanel({ node, onChange, onDelete }: PropertyPanelProps) {
+/** Loop 子图最小合法骨架：start → end 两节点一条边（与 WorkflowSubgraph 结构对齐，无额外版本字段） */
+function buildSubgraphSkeleton(): WorkflowSubgraph {
+  return {
+    nodes: [
+      { id: 'sub_start', type: 'start', name: '循环体开始', position: { x: 0, y: 0 }, data: {} },
+      {
+        id: 'sub_end',
+        type: 'end',
+        name: '循环体结束',
+        position: { x: 240, y: 0 },
+        data: { outputs: { result: '{{loop.item}}' } },
+      },
+    ],
+    edges: [{ id: 'edge_sub_start_sub_end', source: 'sub_start', target: 'sub_end' }],
+  };
+}
+
+export function PropertyPanel({ node, onChange, onDelete, peerNodes }: PropertyPanelProps) {
   const data = node.data as NodeDataShape;
   const meta = NODE_TYPE_META[data.nodeType];
   const [tools, setTools] = useState<McpTool[]>([]);
   const [toolsError, setToolsError] = useState<string | null>(null);
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
 
   useEffect(() => {
     if (data.nodeType === 'agent' || data.nodeType === 'tool') {
@@ -391,6 +898,37 @@ export function PropertyPanel({ node, onChange, onDelete }: PropertyPanelProps) 
         });
     }
   }, [data.nodeType]);
+
+  useEffect(() => {
+    // Provider 列表加载失败时静默降级为空数组（各字段退化为手输）
+    let cancelled = false;
+    void providersApi
+      .list()
+      .then((result) => {
+        if (!cancelled) setProviders(result.providers ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setProviders([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  let flowPeers: PeerNode[] = [];
+  try {
+    // 面板挂在 ReactFlowProvider 内，可直接读取同画布节点；孤立渲染环境（如部分测试）没有 Provider，静默降级
+    const flowInstance = useReactFlow();
+    flowPeers = flowInstance.getNodes()
+      .filter((item) => item.id !== node.id)
+      .map((item) => ({
+        id: item.id,
+        name: typeof item.data['name'] === 'string' ? item.data['name'] as string : undefined,
+      }));
+  } catch {
+    flowPeers = [];
+  }
+  const peers: PeerNode[] = peerNodes ?? flowPeers;
 
   return (
     <aside className="flex w-72 shrink-0 flex-col overflow-auto border-l border-neutral-200 bg-white p-3">
@@ -416,7 +954,7 @@ export function PropertyPanel({ node, onChange, onDelete }: PropertyPanelProps) 
         </Field>
 
         {data.nodeType === 'start' && (
-          <Field label="输入 Schema（JSON，可选）">
+          <Field label="输入 Schema（JSON，可选）" hint="声明运行输入结构，下游用 {{input.xxx}} 引用">
             <JsonField
               value={(data as unknown as StartNodeData).inputSchema ?? {}}
               onChange={(inputSchema) => onChange({ inputSchema })}
@@ -426,111 +964,72 @@ export function PropertyPanel({ node, onChange, onDelete }: PropertyPanelProps) 
         )}
 
         {data.nodeType === 'end' && (
-          <Field label="输出映射">
+          <FieldBlock label="输出映射" hint="工作流最终输出的字段">
             <TemplateMapEditor
+              key={node.id}
               value={((data as unknown as EndNodeData).outputs ?? {}) as Record<string, string>}
               onChange={(outputs) => onChange({ outputs })}
               keyPlaceholder="字段名"
+              peers={peers}
             />
-          </Field>
+          </FieldBlock>
         )}
 
         {data.nodeType === 'agent' && (
           <AgentForm
+            key={node.id}
             data={data as unknown as AgentNodeData}
             onChange={(patch) => onChange(patch as Record<string, unknown>)}
+            tools={tools}
+            toolsError={toolsError}
+            providers={providers}
+            peers={peers}
+          />
+        )}
+
+        {data.nodeType === 'llm' && (
+          <LlmForm
+            key={node.id}
+            data={data as unknown as LlmNodeData}
+            onChange={(patch) => onChange(patch as Record<string, unknown>)}
+            providers={providers}
+            peers={peers}
+          />
+        )}
+
+        {data.nodeType === 'tool' && (
+          <ToolForm
+            key={node.id}
+            data={data as unknown as ToolNodeData}
+            onChange={onChange}
             tools={tools}
             toolsError={toolsError}
           />
         )}
 
-        {data.nodeType === 'llm' && (
-          <div className="space-y-3">
-            <Field label="Provider">
-              <TextInput
-                value={(data as unknown as LlmNodeData).provider ?? ''}
-                onChange={(provider) => onChange({ provider })}
-              />
-            </Field>
-            <Field label="模型">
-              <TextInput
-                value={(data as unknown as LlmNodeData).model ?? ''}
-                onChange={(model) => onChange({ model })}
-              />
-            </Field>
-            <Field label="提示词">
-              <TextArea
-                value={(data as unknown as LlmNodeData).prompt ?? ''}
-                onChange={(prompt) => onChange({ prompt })}
-              />
-            </Field>
-            <Field label="Temperature">
-              <NumberInput
-                value={(data as unknown as LlmNodeData).temperature}
-                onChange={(temperature) => onChange({ temperature })}
-                placeholder="0.7"
-              />
-            </Field>
-          </div>
-        )}
-
-        {data.nodeType === 'tool' && (
-          <div className="space-y-3">
-            <Field label="选择 MCP 工具">
-              {tools.length === 0 ? (
-                toolsError ? (<p className="text-xs text-red-500">工具列表加载失败：{toolsError}</p>) : (<p className="text-xs text-neutral-400">注册表为空，请先在 MCP Servers 页添加</p>)
-              ) : (
-                <select
-                  value={`${(data as unknown as ToolNodeData).server ?? ''}:${(data as unknown as ToolNodeData).tool ?? ''}`}
-                  onChange={(event) => {
-                    const [server, tool] = event.target.value.split(':');
-                    onChange({ server, tool });
-                  }}
-                  className={inputClass}
-                >
-                  <option value="">选择工具…</option>
-                  {tools.map((tool) => (
-                    <option key={tool.qualifiedName} value={tool.qualifiedName}>
-                      {tool.qualifiedName}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </Field>
-            <Field label="参数 JSON（值支持模板）">
-              <JsonField
-                value={(data as unknown as ToolNodeData).args ?? {}}
-                onChange={(args) => onChange({ args })}
-                rows={4}
-              />
-            </Field>
-            <Field label="超时 (ms)">
-              <NumberInput
-                value={(data as unknown as ToolNodeData).timeoutMs}
-                onChange={(timeoutMs) => onChange({ timeoutMs })}
-                placeholder="30000"
-              />
-            </Field>
-          </div>
-        )}
-
         {data.nodeType === 'condition' && (
-          <ConditionForm
-            data={data as unknown as ConditionNodeData}
-            onChange={(patch) => onChange(patch as Record<string, unknown>)}
-          />
+          <div className="space-y-2">
+            <p className="text-xs font-medium text-neutral-500">
+              分支条件
+              <span className="ml-1 font-normal text-neutral-400">按表达式命中分支，出边的 sourceHandle 对应分支 id</span>
+            </p>
+            <ConditionForm
+              data={data as unknown as ConditionNodeData}
+              onChange={(patch) => onChange(patch as Record<string, unknown>)}
+            />
+          </div>
         )}
 
         {data.nodeType === 'loop' && (
           <div className="space-y-3">
-            <Field label="最大迭代次数">
+            <Field label="最大迭代次数" hint="硬上限，防止失控">
               <NumberInput
                 value={(data as unknown as LoopNodeData).maxIterations}
                 onChange={(maxIterations) => onChange({ maxIterations })}
                 placeholder="5"
               />
             </Field>
-            <Field label="迭代集合（模板）">
+            <Field label="迭代集合（模板）" hint="每轮遍历的数组">
               <TextInput
                 value={(data as unknown as LoopNodeData).collection ?? ''}
                 onChange={(collection) => onChange({ collection })}
@@ -538,7 +1037,7 @@ export function PropertyPanel({ node, onChange, onDelete }: PropertyPanelProps) 
                 mono
               />
             </Field>
-            <Field label="迭代变量名">
+            <Field label="迭代变量名" hint="子图内用 {{loop.item}} 引用当前项">
               <TextInput
                 value={(data as unknown as LoopNodeData).itemVariable ?? ''}
                 onChange={(itemVariable) => onChange({ itemVariable })}
@@ -546,7 +1045,19 @@ export function PropertyPanel({ node, onChange, onDelete }: PropertyPanelProps) 
                 mono
               />
             </Field>
-            <Field label="子图 JSON（nodes/edges，画布暂不支持可视化编辑）">
+            <FieldBlock label="子图 JSON（nodes/edges）" hint="循环体在此定义，主图保持 DAG；画布暂不支持可视化编辑">
+              <button
+                type="button"
+                onClick={() => {
+                  const subgraph = (data as unknown as LoopNodeData).subgraph;
+                  const hasContent = Array.isArray(subgraph?.nodes) && subgraph.nodes.length > 0;
+                  if (hasContent && !window.confirm('已有子图内容，确定覆盖为骨架？')) return;
+                  onChange({ subgraph: buildSubgraphSkeleton() });
+                }}
+                className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-50"
+              >
+                插入子图骨架（start → end）
+              </button>
               <JsonField
                 value={
                   (data as unknown as LoopNodeData).subgraph ?? { nodes: [], edges: [] }
@@ -555,13 +1066,13 @@ export function PropertyPanel({ node, onChange, onDelete }: PropertyPanelProps) 
                 rows={8}
                 placeholder='{"nodes":[{"id":"step","type":"llm",...}],"edges":[]}'
               />
-            </Field>
+            </FieldBlock>
           </div>
         )}
 
         {data.nodeType === 'human' && (
           <div className="space-y-3">
-            <Field label="审批说明">
+            <Field label="审批说明" hint="展示给审批人，运行到此挂起等待">
               <TextArea
                 value={(data as unknown as HumanNodeData).prompt ?? ''}
                 onChange={(prompt) => onChange({ prompt })}
@@ -578,15 +1089,17 @@ export function PropertyPanel({ node, onChange, onDelete }: PropertyPanelProps) 
         )}
 
         {data.nodeType === 'transform' && (
-          <Field label="模板映射">
+          <FieldBlock label="模板映射" hint="把上游输出重整为本节点的输出结构">
             <TemplateMapEditor
+              key={node.id}
               value={
                 ((data as unknown as TransformNodeData).template ?? {}) as Record<string, string>
               }
               onChange={(template) => onChange({ template })}
               keyPlaceholder="字段名"
+              peers={peers}
             />
-          </Field>
+          </FieldBlock>
         )}
 
         {/* 节点级韧性配置：暂存于 data.__nodeExtras，保存时还原为定义顶层字段（见 convert.ts） */}

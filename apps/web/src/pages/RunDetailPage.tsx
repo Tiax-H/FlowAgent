@@ -3,47 +3,23 @@ import type { RunSummary, WorkflowEvent } from '@flowagent/shared';
 
 import { runsApi } from '../api/runs';
 import { foldReplayState } from '../runs/fold';
-
-const STATUS_STYLES: Record<string, string> = {
-  pending: 'bg-neutral-100 text-neutral-500',
-  running: 'bg-blue-100 text-blue-700',
-  suspended: 'bg-yellow-100 text-yellow-700',
-  waiting_human: 'bg-pink-100 text-pink-700',
-  completed: 'bg-green-100 text-green-700',
-  failed: 'bg-red-100 text-red-700',
-  canceled: 'bg-neutral-100 text-neutral-500',
-};
-
-const STATUS_LABELS: Record<string, string> = {
-  pending: '等待中',
-  running: '运行中',
-  suspended: '已挂起',
-  waiting_human: '等待人工',
-  completed: '已完成',
-  failed: '失败',
-  canceled: '已取消',
-};
-
-const NODE_STATUS_STYLES: Record<string, string> = {
-  idle: 'bg-neutral-100 text-neutral-500',
-  running: 'bg-blue-100 text-blue-700',
-  succeeded: 'bg-green-100 text-green-700',
-  failed: 'bg-red-100 text-red-700',
-  skipped: 'bg-neutral-200 text-neutral-400',
-  suspended: 'bg-pink-100 text-pink-700',
-};
-
-const NODE_STATUS_LABELS: Record<string, string> = {
-  idle: '未开始',
-  running: '执行中',
-  succeeded: '成功',
-  failed: '失败',
-  skipped: '已跳过',
-  suspended: '挂起',
-};
+import { eventLabel } from '../lib/eventLabels';
+import {
+  Button,
+  CopyButton,
+  LoadingRows,
+  NodeStatusBadge,
+  RunStatusBadge,
+} from '../components/ui';
 
 /** 时间轴最多渲染最近多少条事件（超出提示总数，避免长 run 冻结 DOM） */
 const MAX_VISIBLE_EVENTS = 500;
+
+/** 这些事件默认展开完整 payload（失败原因、人工审批上下文最常被查看） */
+const DEFAULT_EXPANDED_EVENT_TYPES = new Set<string>(['RUN_FAILED', 'NODE_FAILED', 'HUMAN_WAITING']);
+
+/** 输入/输出面板超过多少行时默认限高滚动 */
+const IO_COLLAPSED_LINES = 8;
 
 const EVENT_TYPE_COLORS: Record<string, string> = {
   RUN_STARTED: 'text-blue-600',
@@ -68,6 +44,20 @@ const EVENT_TYPE_COLORS: Record<string, string> = {
 };
 
 const TERMINAL_STATUSES = ['completed', 'failed', 'canceled'];
+
+/** fetch 错误中文化：网络层失败（TypeError）单独提示，其余透传原始消息 */
+function toUserMessage(cause: unknown): string {
+  return cause instanceof TypeError
+    ? '无法连接服务器，请确认 server 已启动'
+    : cause instanceof Error
+      ? cause.message
+      : String(cause);
+}
+
+/** 完整 payload 的格式化 JSON（时间轴展开区展示用） */
+function stringifyPayload(payload: unknown): string {
+  return JSON.stringify(payload ?? {}, null, 2);
+}
 
 function eventSummary(event: WorkflowEvent): string {
   const payload = (event.payload ?? {}) as Record<string, unknown>;
@@ -99,26 +89,81 @@ function parseHumanInputText(text: string): unknown {
   }
 }
 
+/** 输入/输出只读面板：标题行带复制按钮；超过 IO_COLLAPSED_LINES 行默认限高滚动，可「展开全部」 */
+function IoPanel({ title, text }: { title: string; text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const collapsible = useMemo(() => text.split('\n').length > IO_COLLAPSED_LINES, [text]);
+  return (
+    <div>
+      <div className="mb-1 flex items-center gap-1">
+        <h2 className="min-w-0 flex-1 truncate text-xs font-semibold uppercase tracking-wide text-neutral-400">
+          {title}
+        </h2>
+        {collapsible && (
+          <button
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+            className="shrink-0 rounded border border-neutral-200 bg-white px-1.5 py-0.5 text-xs text-neutral-500 transition-colors hover:border-neutral-400 hover:text-neutral-700"
+          >
+            {expanded ? '收起' : '展开全部'}
+          </button>
+        )}
+        <CopyButton text={text} />
+      </div>
+      <pre
+        className={`whitespace-pre-wrap break-all rounded bg-neutral-50 p-2 text-[10px] leading-relaxed ${
+          collapsible && !expanded ? 'max-h-40 overflow-auto' : ''
+        }`}
+      >
+        {text}
+      </pre>
+    </div>
+  );
+}
+
 export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => void }) {
   const [summary, setSummary] = useState<RunSummary | null>(null);
   const [events, setEvents] = useState<WorkflowEvent[]>([]);
+  /** 详情首次加载是否完成（完成前用骨架行兜底） */
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  /** 控制操作成功后的短暂提示 */
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [humanInputText, setHumanInputText] = useState('');
   const [replayCursor, setReplayCursor] = useState<number | null>(null);
   const [playing, setPlaying] = useState(false);
   const [streamEpoch, setStreamEpoch] = useState(0);
   const [streamConnected, setStreamConnected] = useState(true);
+  /** 用户手动展开/收起过的事件行（seq → 是否展开；未出现时按事件类型默认值） */
+  const [expandedSeqs, setExpandedSeqs] = useState<Record<number, boolean>>({});
   const timelineRef = useRef<HTMLDivElement>(null);
   const eventsRef = useRef<WorkflowEvent[]>([]);
   /** 事件摘要缓存（按 seq）：大 payload 的 stringify 只在事件到达时做一次 */
   const summaryCacheRef = useRef<Map<number, string>>(new Map());
+  /** 完整 payload JSON 缓存（按 seq），供展开区渲染 */
+  const payloadJsonCacheRef = useRef<Map<number, string>>(new Map());
+  const noticeTimerRef = useRef<number | null>(null);
 
   const isTerminal = summary !== null && TERMINAL_STATUSES.includes(summary.status);
   const replayActive = isTerminal && replayCursor !== null;
 
-  // 初始加载 + SSE 实时流（控制动作后经 streamEpoch 重订；断线交给浏览器自动重连，
+  // 操作成功后的"已提交"提示自动消失
+  useEffect(
+    () => () => {
+      if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
+    },
+    [],
+  );
+
+  const flashNotice = (text: string): void => {
+    if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
+    setActionNotice(text);
+    noticeTimerRef.current = window.setTimeout(() => setActionNotice(null), 2500);
+  };
+
+  // 初始加载 + SSE 实时流（控制动作与手动重试后经 streamEpoch 重订；断线交给浏览器自动重连，
   // 服务端按 Last-Event-ID 从断点续传，不重放全量）
   useEffect(() => {
     let source: EventSource | null = null;
@@ -126,13 +171,22 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
 
     eventsRef.current = [];
     summaryCacheRef.current = new Map();
+    payloadJsonCacheRef.current = new Map();
     setEvents([]);
+    setExpandedSeqs({});
+    setLoading(true);
 
     void runsApi
       .get(runId)
-      .then(setSummary)
+      .then((data) => {
+        setSummary(data);
+        setError(null);
+      })
       .catch((cause: unknown) => {
-        setError(cause instanceof Error ? cause.message : String(cause));
+        setError(toUserMessage(cause));
+      })
+      .finally(() => {
+        if (!disposed) setLoading(false);
       });
 
     source = new EventSource(`/api/runs/${runId}/stream`);
@@ -145,6 +199,7 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
       if (eventsRef.current.some((existing) => existing.seq === event.seq)) return;
       eventsRef.current = [...eventsRef.current, event];
       summaryCacheRef.current.set(event.seq, eventSummary(event));
+      payloadJsonCacheRef.current.set(event.seq, stringifyPayload(event.payload));
       setEvents(eventsRef.current);
     });
     source.addEventListener('done', () => {
@@ -198,9 +253,11 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
   const runAction = (action: () => Promise<unknown>, onSuccess?: () => void): void => {
     setBusy(true);
     setActionError(null);
+    setActionNotice(null);
     action()
       .then(() => {
         onSuccess?.();
+        flashNotice('已提交');
         void runsApi
           .get(runId)
           .then(setSummary)
@@ -210,13 +267,16 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
           .then((fresh) => {
             eventsRef.current = fresh;
             summaryCacheRef.current = new Map(fresh.map((event) => [event.seq, eventSummary(event)]));
+            payloadJsonCacheRef.current = new Map(
+              fresh.map((event) => [event.seq, stringifyPayload(event.payload)]),
+            );
             setEvents(fresh);
           })
           .catch(() => undefined);
         setStreamEpoch((epoch) => epoch + 1);
       })
       .catch((cause: unknown) => {
-        setActionError(cause instanceof Error ? cause.message : String(cause));
+        setActionError(toUserMessage(cause));
       })
       .finally(() => setBusy(false));
   };
@@ -263,57 +323,31 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
           ← 返回
         </button>
         <h1 className="text-sm font-semibold">{summary ? summary.workflowName : runId}</h1>
-        {summary && (
-          <span
-            className={`rounded-full px-2 py-0.5 text-xs ${STATUS_STYLES[summary.status] ?? ''}`}
-          >
-            {STATUS_LABELS[summary.status] ?? summary.status}
-          </span>
-        )}
+        {summary && <RunStatusBadge status={summary.status} />}
         {summary && <span className="text-xs text-neutral-400">v{summary.workflowVersion}</span>}
 
         {/* 操作栏：failed 仍提供断点重试；其余非终态提供取消/暂停/恢复 */}
         {summary && (summary.status === 'failed' || !TERMINAL_STATUSES.includes(summary.status)) && (
           <div className="ml-auto flex items-center gap-2">
             {summary.status === 'running' && (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => runAction(() => runsApi.pause(runId))}
-                className="rounded border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs text-amber-700 hover:bg-amber-100 disabled:opacity-50"
-              >
+              <Button variant="secondary" disabled={busy} onClick={() => runAction(() => runsApi.pause(runId))}>
                 暂停
-              </button>
+              </Button>
             )}
             {summary.status === 'suspended' && (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => runAction(() => runsApi.resume(runId))}
-                className="rounded border border-blue-300 bg-blue-50 px-2.5 py-1 text-xs text-blue-700 hover:bg-blue-100 disabled:opacity-50"
-              >
+              <Button variant="accent" disabled={busy} onClick={() => runAction(() => runsApi.resume(runId))}>
                 恢复
-              </button>
+              </Button>
             )}
             {summary.status === 'failed' && (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => runAction(() => runsApi.retry(runId))}
-                className="rounded border border-blue-300 bg-blue-50 px-2.5 py-1 text-xs text-blue-700 hover:bg-blue-100 disabled:opacity-50"
-              >
+              <Button variant="accent" disabled={busy} onClick={() => runAction(() => runsApi.retry(runId))}>
                 从断点重试
-              </button>
+              </Button>
             )}
             {summary.status !== 'failed' && (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => runAction(() => runsApi.cancel(runId))}
-                className="rounded border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-600 hover:bg-neutral-100 disabled:opacity-50"
-              >
+              <Button variant="dangerOutline" disabled={busy} onClick={() => runAction(() => runsApi.cancel(runId))}>
                 取消
-              </button>
+              </Button>
             )}
           </div>
         )}
@@ -352,33 +386,40 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
           <textarea
             value={humanInputText}
             onChange={(changeEvent) => setHumanInputText(changeEvent.target.value)}
-            placeholder="补充输入（可选，JSON 或纯文本）"
+            placeholder="可填写审批意见或补充信息（纯文本或 JSON）"
             rows={2}
             className="mt-2 w-full max-w-xl rounded border border-pink-200 bg-white px-2 py-1 text-xs"
           />
           <div className="mt-2 flex gap-2">
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => submitHuman(true)}
-              className="rounded bg-green-600 px-3 py-1 text-xs text-white hover:bg-green-700 disabled:opacity-50"
-            >
+            <Button variant="accent" disabled={busy} onClick={() => submitHuman(true)}>
               批准并继续
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => submitHuman(false)}
-              className="rounded bg-red-600 px-3 py-1 text-xs text-white hover:bg-red-700 disabled:opacity-50"
-            >
+            </Button>
+            <Button variant="dangerOutline" disabled={busy} onClick={() => submitHuman(false)}>
               拒绝
-            </button>
+            </Button>
           </div>
         </section>
       )}
 
-      {error && <p className="bg-red-50 px-4 py-2 text-sm text-red-600">{error}</p>}
-      {actionError && <p className="bg-orange-50 px-4 py-2 text-sm text-orange-600">{actionError}</p>}
+      {/* 详情加载失败：黄条 + 重试 */}
+      {error && !summary && !loading && (
+        <div className="flex items-center gap-3 bg-yellow-50 px-4 py-2 text-sm text-yellow-700">
+          <span className="min-w-0 flex-1">{error}</span>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setError(null);
+              setStreamEpoch((epoch) => epoch + 1);
+            }}
+          >
+            重试
+          </Button>
+        </div>
+      )}
+      {actionError && (
+        <p className="bg-red-50 px-4 py-2 text-sm text-red-600">操作失败：{actionError}</p>
+      )}
+      {actionNotice && <p className="bg-green-50 px-4 py-2 text-sm text-green-700">{actionNotice}</p>}
       {!streamConnected && !isTerminal && (
         <p className="bg-yellow-50 px-4 py-2 text-xs text-yellow-700">
           实时连接已断开，正在自动重连（服务恢复后会从断点继续接收事件）…
@@ -428,101 +469,117 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1">
-        {/* 节点状态看板（回放时随游标折叠） */}
-        <aside className="w-64 shrink-0 overflow-auto border-r border-neutral-200 bg-white p-3">
-          <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">
-            节点看板{replayActive ? '（回放）' : ''}
-          </h2>
-          {boardNodes.length === 0 ? (
-            <p className="text-xs text-neutral-400">暂无节点状态</p>
-          ) : (
-            <ul className="space-y-1.5">
-              {boardNodes.map((node) => (
-                <li key={node.nodeId} className="rounded border border-neutral-200 px-2 py-1.5">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate text-xs font-medium text-neutral-700">
-                      {node.name}
-                    </span>
-                    <span
-                      className={`ml-auto shrink-0 rounded px-1.5 py-0.5 text-[10px] ${NODE_STATUS_STYLES[node.status] ?? NODE_STATUS_STYLES.idle}`}
-                    >
-                      {NODE_STATUS_LABELS[node.status] ?? node.status}
-                    </span>
-                  </div>
-                  <code className="block truncate text-[10px] text-neutral-400">{node.nodeId}</code>
-                  {node.error && <p className="truncate text-[10px] text-red-500">{node.error}</p>}
-                </li>
-              ))}
-            </ul>
-          )}
-        </aside>
-
-        {/* 事件时间轴（回放时游标之后的事件淡化；超长时只渲染最近 N 条） */}
-        <div ref={timelineRef} className="min-w-0 flex-1 overflow-auto bg-neutral-50 p-4">
-          <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">
-            事件时间轴（{events.length}
-            {events.length > MAX_VISIBLE_EVENTS ? `，仅显示最近 ${MAX_VISIBLE_EVENTS} 条` : ''}）
-          </h2>
-          <ol className="space-y-1">
-            {events.slice(-MAX_VISIBLE_EVENTS).map((event) => {
-              const dimmed = replayActive && event.seq > (replayCursor ?? 0);
-              return (
-                <li
-                  key={`${event.seq}-${String(event.id ?? '')}`}
-                  className={`flex items-baseline gap-2 rounded bg-white px-3 py-1.5 text-xs shadow-sm transition-opacity ${dimmed ? 'opacity-30' : ''}`}
-                >
-                  <span className="w-8 shrink-0 text-right font-mono text-[10px] text-neutral-300">
-                    {event.seq}
-                  </span>
-                  <span
-                    className={`w-36 shrink-0 font-mono text-[11px] font-semibold ${EVENT_TYPE_COLORS[event.type] ?? 'text-neutral-600'}`}
-                  >
-                    {event.type}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-neutral-600">
-                    {summaryCacheRef.current.get(event.seq) ?? eventSummary(event)}
-                  </span>
-                  <span className="shrink-0 font-mono text-[10px] text-neutral-300">
-                    {new Date(event.timestamp).toLocaleTimeString('zh-CN')}
-                  </span>
-                </li>
-              );
-            })}
-            {events.length === 0 && <li className="text-xs text-neutral-400">等待事件…</li>}
-          </ol>
+      {loading && !summary ? (
+        /* 详情加载中的骨架兜底 */
+        <div className="flex min-h-0 flex-1 items-start justify-center p-6">
+          <div className="w-full max-w-md">
+            <LoadingRows rows={5} />
+          </div>
         </div>
+      ) : (
+        <div className="flex min-h-0 flex-1">
+          {/* 节点状态看板（回放时随游标折叠） */}
+          <aside className="w-64 shrink-0 overflow-auto border-r border-neutral-200 bg-white p-3">
+            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">
+              节点看板{replayActive ? '（回放）' : ''}
+            </h2>
+            {boardNodes.length === 0 ? (
+              <p className="text-xs text-neutral-400">暂无节点状态</p>
+            ) : (
+              <ul className="space-y-1.5">
+                {boardNodes.map((node) => (
+                  <li key={node.nodeId} className="rounded border border-neutral-200 px-2 py-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-xs font-medium text-neutral-700">
+                        {node.name}
+                      </span>
+                      <span className="ml-auto">
+                        <NodeStatusBadge status={node.status} />
+                      </span>
+                    </div>
+                    <code className="block truncate text-[10px] text-neutral-400">{node.nodeId}</code>
+                    {node.error && <p className="truncate text-[10px] text-red-500">{node.error}</p>}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </aside>
 
-        {/* 输入输出 */}
-        <aside className="w-64 shrink-0 space-y-3 overflow-auto border-l border-neutral-200 bg-white p-3">
-          <div>
-            <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-neutral-400">
-              输入
+          {/* 事件时间轴（回放时游标之后的事件淡化；超长时只渲染最近 N 条；行可点击展开完整 payload） */}
+          <div ref={timelineRef} className="min-w-0 flex-1 overflow-auto bg-neutral-50 p-4">
+            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">
+              事件时间轴（{events.length}
+              {events.length > MAX_VISIBLE_EVENTS ? `，仅显示最近 ${MAX_VISIBLE_EVENTS} 条` : ''}）
             </h2>
-            <pre className="overflow-auto rounded bg-neutral-50 p-2 text-[10px]">
-              {summary ? JSON.stringify(summary.input, null, 2) : '…'}
-            </pre>
+            <ol className="space-y-1">
+              {events.slice(-MAX_VISIBLE_EVENTS).map((event) => {
+                const dimmed = replayActive && event.seq > (replayCursor ?? 0);
+                const defaultExpanded = DEFAULT_EXPANDED_EVENT_TYPES.has(event.type);
+                const expanded = expandedSeqs[event.seq] ?? defaultExpanded;
+                return (
+                  <li
+                    key={`${event.seq}-${String(event.id ?? '')}`}
+                    className={`overflow-hidden rounded bg-white text-xs shadow-sm transition-opacity ${dimmed ? 'opacity-30' : ''}`}
+                  >
+                    <button
+                      type="button"
+                      aria-expanded={expanded}
+                      title={event.type}
+                      onClick={() =>
+                        setExpandedSeqs((prev) => ({ ...prev, [event.seq]: !expanded }))
+                      }
+                      className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left transition-colors hover:bg-neutral-50"
+                    >
+                      <span className="w-8 shrink-0 text-right font-mono text-[10px] text-neutral-300">
+                        {event.seq}
+                      </span>
+                      <span
+                        className={`w-28 shrink-0 font-semibold ${EVENT_TYPE_COLORS[event.type] ?? 'text-neutral-600'}`}
+                      >
+                        {eventLabel(event.type)}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-neutral-600">
+                        {summaryCacheRef.current.get(event.seq) ?? eventSummary(event)}
+                      </span>
+                      <span className="shrink-0 font-mono text-[10px] text-neutral-300">
+                        {new Date(event.timestamp).toLocaleTimeString('zh-CN')}
+                      </span>
+                      <span className="shrink-0 text-[10px] text-neutral-400">
+                        {expanded ? '▾ 收起' : '▸ 展开'}
+                      </span>
+                    </button>
+                    {expanded && (
+                      <pre className="mx-3 mb-2 max-h-60 overflow-auto whitespace-pre-wrap break-all rounded bg-neutral-50 p-2 font-mono text-[10px] leading-relaxed text-neutral-700">
+                        {payloadJsonCacheRef.current.get(event.seq) ?? stringifyPayload(event.payload)}
+                      </pre>
+                    )}
+                  </li>
+                );
+              })}
+              {events.length === 0 && <li className="text-xs text-neutral-400">等待事件…</li>}
+            </ol>
           </div>
-          <div>
-            <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-neutral-400">
-              输出
-            </h2>
-            <pre className="overflow-auto rounded bg-neutral-50 p-2 text-[10px]">
-              {summary?.output != null ? JSON.stringify(summary.output, null, 2) : '—'}
-            </pre>
-          </div>
-          {summary?.error && (
-            <div>
-              <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-red-400">
-                错误
-              </h2>
-              <pre className="overflow-auto rounded bg-red-50 p-2 text-[10px] text-red-600">
-                {summary.error}
-              </pre>
-            </div>
-          )}
-        </aside>
-      </div>
+
+          {/* 输入输出 */}
+          <aside className="w-64 shrink-0 space-y-3 overflow-auto border-l border-neutral-200 bg-white p-3">
+            <IoPanel title="输入" text={summary ? JSON.stringify(summary.input, null, 2) : '…'} />
+            <IoPanel
+              title="输出"
+              text={summary?.output != null ? JSON.stringify(summary.output, null, 2) : '—'}
+            />
+            {summary?.error && (
+              <div>
+                <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-red-400">
+                  错误
+                </h2>
+                <pre className="overflow-auto whitespace-pre-wrap break-all rounded bg-red-50 p-2 text-[10px] leading-relaxed text-red-600">
+                  {summary.error}
+                </pre>
+              </div>
+            )}
+          </aside>
+        </div>
+      )}
     </div>
   );
 }

@@ -2,37 +2,37 @@ import { useCallback, useEffect, useState } from 'react';
 import type { RunSummary } from '@flowagent/shared';
 
 import { runsApi } from '../api/runs';
+import { Button, EmptyState, LoadingRows, RunStatusBadge } from '../components/ui';
 
-const STATUS_STYLES: Record<string, string> = {
-  pending: 'bg-neutral-100 text-neutral-500',
-  running: 'bg-blue-100 text-blue-700',
-  suspended: 'bg-yellow-100 text-yellow-700',
-  waiting_human: 'bg-pink-100 text-pink-700',
-  completed: 'bg-green-100 text-green-700',
-  failed: 'bg-red-100 text-red-700',
-  canceled: 'bg-neutral-100 text-neutral-500',
-};
+/** fetch 错误中文化：网络层失败（TypeError）单独提示，其余透传原始消息 */
+function toUserMessage(cause: unknown): string {
+  return cause instanceof TypeError
+    ? '无法连接服务器，请确认 server 已启动'
+    : cause instanceof Error
+      ? cause.message
+      : String(cause);
+}
 
-const STATUS_LABELS: Record<string, string> = {
-  pending: '等待中',
-  running: '运行中',
-  suspended: '已挂起',
-  waiting_human: '等待人工',
-  completed: '已完成',
-  failed: '失败',
-  canceled: '已取消',
-};
-
-export function RunsPage({ onOpenRun }: { onOpenRun: (runId: string) => void }) {
+export function RunsPage({
+  onOpenRun,
+  onGoWorkflows,
+}: {
+  onOpenRun: (runId: string) => void;
+  onGoWorkflows?: () => void;
+}) {
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
+  /** 首次加载是否已完成（完成前显示骨架行，避免闪现空状态） */
+  const [initialLoaded, setInitialLoaded] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
       setRuns(await runsApi.list());
       setError(null);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(toUserMessage(cause));
+    } finally {
+      setInitialLoaded(true);
     }
   }, []);
 
@@ -48,32 +48,48 @@ export function RunsPage({ onOpenRun }: { onOpenRun: (runId: string) => void }) 
   return (
     <div className="mx-auto w-full max-w-3xl flex-1 overflow-auto p-6">
       <h2 className="mb-4 text-sm font-medium text-neutral-600">运行历史</h2>
-      {error && <p className="rounded bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
-      {runs.length === 0 && !error && (
-        <p className="text-sm text-neutral-400">暂无运行，从编辑器发起一次运行</p>
+      {error && (
+        <div className="mb-3 flex items-center gap-3 rounded bg-red-50 px-3 py-2 text-sm text-red-600">
+          <span className="min-w-0 flex-1">{error}</span>
+          <Button variant="secondary" onClick={() => void refresh()}>
+            重试
+          </Button>
+        </div>
       )}
-      <ul className="space-y-2">
-        {runs.map((run) => (
-          <li key={run.id}>
-            <button
-              type="button"
-              onClick={() => onOpenRun(run.id)}
-              className="flex w-full items-center gap-3 rounded-lg border border-neutral-200 bg-white p-3 text-left transition-colors hover:border-neutral-400"
-            >
-              <span className="text-sm font-medium">{run.workflowName}</span>
-              <span
-                className={`rounded-full px-2 py-0.5 text-xs ${STATUS_STYLES[run.status] ?? ''}`}
+      {!initialLoaded ? (
+        <LoadingRows rows={4} />
+      ) : runs.length === 0 && !error ? (
+        <EmptyState
+          title="还没有运行记录"
+          description="在编辑器里打开一个工作流，点 ▶ 运行 即可发起"
+          action={
+            onGoWorkflows ? (
+              <Button variant="primary" onClick={onGoWorkflows}>
+                去工作流列表
+              </Button>
+            ) : undefined
+          }
+        />
+      ) : (
+        <ul className="space-y-2">
+          {runs.map((run) => (
+            <li key={run.id}>
+              <button
+                type="button"
+                onClick={() => onOpenRun(run.id)}
+                className="flex w-full items-center gap-3 rounded-lg border border-neutral-200 bg-white p-3 text-left transition-colors hover:border-neutral-400"
               >
-                {STATUS_LABELS[run.status] ?? run.status}
-              </span>
-              <span className="text-xs text-neutral-400">v{run.workflowVersion}</span>
-              <span className="ml-auto text-xs text-neutral-400">
-                {run.startedAt ? new Date(run.startedAt).toLocaleString('zh-CN') : '—'}
-              </span>
-            </button>
-          </li>
-        ))}
-      </ul>
+                <span className="text-sm font-medium">{run.workflowName}</span>
+                <RunStatusBadge status={run.status} />
+                <span className="text-xs text-neutral-400">v{run.workflowVersion}</span>
+                <span className="ml-auto text-xs text-neutral-400">
+                  {run.startedAt ? new Date(run.startedAt).toLocaleString('zh-CN') : '—'}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
