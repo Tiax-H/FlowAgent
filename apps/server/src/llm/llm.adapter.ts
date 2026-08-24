@@ -56,6 +56,12 @@ export interface LlmProviderConfig {
   models: string[];
 }
 
+/** 对外暴露的 Provider 信息（只含名称与模型列表，不含 baseURL/apiKey） */
+export interface LlmProviderInfo {
+  name: string;
+  models: string[];
+}
+
 const PROVIDER_ENV_PREFIX = 'FLOWAGENT_PROVIDERS_';
 
 /** 从环境变量解析 Provider 配置表：FLOWAGENT_PROVIDERS_<NAME>__BASEURL/__APIKEY/__MODELS */
@@ -115,6 +121,13 @@ export class LlmAdapter {
 
   listProviderNames(): string[] {
     return [...this.providers.keys()];
+  }
+
+  /** 已配置 Provider 的公开信息列表（按名称排序，绝不包含 baseURL/apiKey） */
+  listProviders(): LlmProviderInfo[] {
+    return [...this.providers.values()]
+      .map(({ name, models }) => ({ name, models: [...models] }))
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   }
 
   async chatCompletion(

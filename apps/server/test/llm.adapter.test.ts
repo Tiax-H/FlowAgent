@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { LlmProviderError, parseProviderConfigs } from '../src/llm/llm.adapter';
+import { LlmAdapter, LlmProviderError, parseProviderConfigs } from '../src/llm/llm.adapter';
 
 describe('parseProviderConfigs', () => {
   it('解析完整 Provider（baseURL/apiKey/models）', () => {
@@ -43,10 +43,46 @@ describe('parseProviderConfigs', () => {
 
 describe('LlmAdapter（无网络路径）', () => {
   it('未配置的 Provider 抛 LlmProviderError 且不泄漏 key', async () => {
-    const { LlmAdapter } = await import('../src/llm/llm.adapter');
     const adapter = LlmAdapter.fromEnv({});
     await expect(adapter.chatCompletion('missing', 'm', { messages: [] })).rejects.toBeInstanceOf(
       LlmProviderError,
     );
+  });
+});
+
+describe('LlmAdapter.listProviders', () => {
+  it('解析多个 Provider 并按名称排序，只含 name/models', () => {
+    const adapter = LlmAdapter.fromEnv({
+      FLOWAGENT_PROVIDERS_ZETA__BASEURL: 'https://z.example.com/v1',
+      FLOWAGENT_PROVIDERS_ZETA__APIKEY: 'sk-z',
+      FLOWAGENT_PROVIDERS_ZETA__MODELS: 'z-2, z-1',
+      FLOWAGENT_PROVIDERS_ALPHA__BASEURL: 'https://a.example.com/v1',
+      FLOWAGENT_PROVIDERS_ALPHA__APIKEY: 'sk-a',
+      FLOWAGENT_PROVIDERS_ALPHA__MODELS: 'a-1',
+    });
+    expect(adapter.listProviders()).toEqual([
+      { name: 'alpha', models: ['a-1'] },
+      { name: 'zeta', models: ['z-2', 'z-1'] },
+    ]);
+  });
+
+  it('缺 apiKey 或 baseURL 的 Provider 不出现', () => {
+    const adapter = LlmAdapter.fromEnv({
+      FLOWAGENT_PROVIDERS_NOKEY__BASEURL: 'https://n.example.com/v1',
+      FLOWAGENT_PROVIDERS_NOKEY__MODELS: 'm-1',
+      FLOWAGENT_PROVIDERS_NOURL__APIKEY: 'sk-n',
+    });
+    expect(adapter.listProviders()).toEqual([]);
+  });
+
+  it('返回的 models 数组是副本，外部修改不影响内部状态', () => {
+    const adapter = LlmAdapter.fromEnv({
+      FLOWAGENT_PROVIDERS_OPENAI__BASEURL: 'https://api.openai.com/v1',
+      FLOWAGENT_PROVIDERS_OPENAI__APIKEY: 'sk-test',
+      FLOWAGENT_PROVIDERS_OPENAI__MODELS: 'gpt-4o',
+    });
+    const first = adapter.listProviders();
+    first[0]?.models.push('mutated');
+    expect(adapter.listProviders()[0]?.models).toEqual(['gpt-4o']);
   });
 });
