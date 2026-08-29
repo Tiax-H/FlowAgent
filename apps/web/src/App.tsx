@@ -11,7 +11,14 @@ import {
   PlayIcon,
   PlusIcon,
 } from './components/icons';
-import { Button, EmptyState, LoadingRows, Modal } from './components/ui';
+import {
+  Button,
+  ConfirmDialogHost,
+  confirmDialog,
+  EmptyState,
+  LoadingRows,
+  Modal,
+} from './components/ui';
 import { SettingsPage } from './pages/SettingsPage';
 import { McpServersPage } from './pages/McpServersPage';
 import { RunDetailPage } from './pages/RunDetailPage';
@@ -139,22 +146,41 @@ export function App() {
   // 顶部导航、编辑器「← 返回」、浏览器前进/后退统一走这一个入口，避免重复弹窗。
   const routeRef = useRef(route);
   useEffect(() => {
-    const onHashChange = () => {
-      const next = parseHash(window.location.hash);
-      const current = routeRef.current;
-      if (routesEqual(current, next)) return;
-      if (current.kind === 'editor' && editorDirtyRef.current) {
-        if (!window.confirm('画布有未保存修改，确定离开？')) {
-          window.location.hash = routeToHash(current);
-          return;
-        }
-      }
+    const applyRoute = (next: Route): void => {
       if (next.kind !== 'editor') {
         // 离开编辑器：重置 dirty 镜像（编辑器组件随即卸载）
         editorDirtyRef.current = false;
       }
       routeRef.current = next;
       setRoute(next);
+    };
+
+    // 确认是异步 Promise，不再阻塞 hashchange：在途期间忽略后续 hash 变化，收口时统一处理
+    let guardPending = false;
+    const onHashChange = () => {
+      const next = parseHash(window.location.hash);
+      const current = routeRef.current;
+      if (routesEqual(current, next)) return;
+      if (guardPending) return;
+      if (current.kind === 'editor' && editorDirtyRef.current) {
+        guardPending = true;
+        void confirmDialog({
+          title: '离开编辑器？',
+          description: '画布有未保存修改，离开将丢失这些修改。',
+          confirmLabel: '离开',
+        }).then((confirmed) => {
+          guardPending = false;
+          if (!confirmed) {
+            // 取消：回滚地址栏（回滚触发的 hashchange 会因路由相等而空转）
+            window.location.hash = routeToHash(current);
+            return;
+          }
+          // 放行：以确认结束时的地址栏为准（正常场景即触发本次守卫的 next）
+          applyRoute(parseHash(window.location.hash));
+        });
+        return;
+      }
+      applyRoute(next);
     };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
@@ -265,7 +291,13 @@ export function App() {
   }
 
   async function handleDelete(workflow: WorkflowRecord) {
-    if (!window.confirm(`删除工作流「${workflow.name}」？此操作不可恢复。`)) return;
+    const confirmed = await confirmDialog({
+      title: `删除工作流「${workflow.name}」？`,
+      description: '此操作不可恢复。',
+      confirmLabel: '删除',
+      danger: true,
+    });
+    if (!confirmed) return;
     try {
       await workflowsApi.remove(workflow.id);
       await refresh();
@@ -488,11 +520,14 @@ export function App() {
           ) : (
             <ul className="space-y-3">
               {workflows.map((workflow) => (
-                <li key={workflow.id} className="flex items-center gap-2">
+                <li
+                  key={workflow.id}
+                  className="group flex items-center gap-3 rounded-lg border border-border-soft bg-card p-3.5 shadow-xs transition-[border-color,box-shadow] hover:border-border-strong hover:shadow-sm"
+                >
                   <button
                     type="button"
                     onClick={() => go(`/editor/${workflow.id}`)}
-                    className="group flex min-w-0 flex-1 items-center gap-3 rounded-lg border border-border-soft bg-card p-3.5 text-left shadow-xs transition-[border-color,box-shadow] hover:border-border-strong hover:shadow-sm"
+                    className="flex min-w-0 flex-1 items-center gap-3 text-left"
                   >
                     <span className="min-w-0 truncate text-sm font-medium transition-colors group-hover:text-brand-11">
                       {workflow.name}
@@ -513,18 +548,20 @@ export function App() {
                       </span>
                     </span>
                   </button>
-                  <Button variant="accent" size="sm" onClick={() => handleRun(workflow.id)}>
-                    <PlayIcon />
-                    运行
-                  </Button>
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    title="删除工作流"
-                    onClick={() => void handleDelete(workflow)}
-                  >
-                    删除
-                  </Button>
+                  <span className="flex shrink-0 items-center gap-2">
+                    <Button variant="accent" size="sm" onClick={() => handleRun(workflow.id)}>
+                      <PlayIcon />
+                      运行
+                    </Button>
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      title="删除工作流"
+                      onClick={() => void handleDelete(workflow)}
+                    >
+                      删除
+                    </Button>
+                  </span>
                 </li>
               ))}
             </ul>
@@ -544,6 +581,9 @@ export function App() {
           }}
         />
       )}
+
+      {/* 命令式确认对话框宿主：confirmDialog() 的渲染载体（全应用挂载一次） */}
+      <ConfirmDialogHost />
     </div>
   );
 }

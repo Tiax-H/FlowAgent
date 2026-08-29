@@ -15,6 +15,7 @@ import {
 import { WORKFLOW_DELETED_NAME_FALLBACK, type FailurePayloadExtras, type RunSummaryWithFlags } from '../types';
 import {
   Button,
+  confirmDialog,
   CopyButton,
   EmptyState,
   LoadingRows,
@@ -399,8 +400,16 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
       .finally(() => setBusy(false));
   };
 
-  const submitHuman = (approved: boolean): void => {
-    if (!approved && !window.confirm('拒绝将使本次运行直接失败（不可恢复），确定拒绝？')) {
+  const submitHuman = async (approved: boolean): Promise<void> => {
+    if (
+      !approved &&
+      !(await confirmDialog({
+        title: '拒绝本次运行？',
+        description: '拒绝将使本次运行直接失败（不可恢复）。',
+        confirmLabel: '拒绝',
+        danger: true,
+      }))
+    ) {
       return;
     }
     runAction(
@@ -552,30 +561,30 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
         </p>
       )}
 
-      {/* Human 审批表单 */}
+      {/* Human 审批表单（与「等待人工」徽标同 warning 语义色相） */}
       {summary?.status === 'waiting_human' && summary.waitingHuman && (
-        <section className="border-b border-pink-100 bg-pink-50/60 px-4 py-3">
-          <p className="text-sm font-medium text-pink-800">
+        <section className="border-b border-warning-6 bg-warning-2 px-4 py-3">
+          <p className="text-sm font-medium text-warning-12">
             等待人工审批：{summary.waitingHuman.name}
-            <span className="ml-2 font-mono text-2xs text-pink-400">
+            <span className="ml-2 font-mono text-2xs text-warning-11">
               {summary.waitingHuman.nodeId}
             </span>
           </p>
           {summary.waitingHuman.prompt && (
-            <p className="mt-1 text-xs text-pink-600">{summary.waitingHuman.prompt}</p>
+            <p className="mt-1 text-xs text-warning-11">{summary.waitingHuman.prompt}</p>
           )}
           <textarea
             value={humanInputText}
             onChange={(changeEvent) => setHumanInputText(changeEvent.target.value)}
             placeholder="可填写审批意见或补充信息（纯文本或 JSON）"
             rows={2}
-            className="mt-2 w-full max-w-xl rounded-md border border-pink-200 bg-card px-2.5 py-1.5 text-sm"
+            className="mt-2 w-full max-w-xl rounded-md border border-input bg-card px-2.5 py-1.5 text-sm"
           />
           <div className="mt-2 flex gap-2">
-            <Button variant="accent" disabled={busy} onClick={() => submitHuman(true)}>
+            <Button variant="accent" disabled={busy} onClick={() => void submitHuman(true)}>
               批准并继续
             </Button>
-            <Button variant="dangerOutline" disabled={busy} onClick={() => submitHuman(false)}>
+            <Button variant="dangerOutline" disabled={busy} onClick={() => void submitHuman(false)}>
               拒绝
             </Button>
           </div>

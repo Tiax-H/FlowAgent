@@ -21,7 +21,7 @@ import { validateWorkflowDefinition, type NodeType } from '@flowagent/shared';
 
 import { workflowsApi, WorkflowApiError } from '../api/workflows';
 import { ArrowLeftIcon, CheckIcon, PlayIcon } from '../components/icons';
-import { Button } from '../components/ui';
+import { Button, confirmDialog } from '../components/ui';
 import { FlowAgentNode } from '../workflow/components/FlowAgentNode';
 import { NodePalette } from '../workflow/components/NodePalette';
 import { PropertyPanel } from '../workflow/components/PropertyPanel';
@@ -429,8 +429,14 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
   }, [dirty, onDirtyChange]);
 
   /** 导入会用文件内容整体覆盖画布：dirty 时先确认 */
-  const confirmImportOverwrite = (): boolean =>
-    !dirty || window.confirm('画布有未保存修改，导入将覆盖当前内容，确定继续？');
+  const confirmImportOverwrite = async (): Promise<boolean> => {
+    if (!dirty) return true;
+    return confirmDialog({
+      title: '导入并覆盖当前画布？',
+      description: '画布有未保存修改，导入将覆盖当前内容。',
+      confirmLabel: '继续导入',
+    });
+  };
 
   /** 保存：返回保存后的记录（含 id/version）；校验或请求失败返回 null */
   const handleSave = useCallback(async (): Promise<WorkflowRecord | null> => {
@@ -474,8 +480,17 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
   }, [definition, name, record, definitionJson]);
 
   /** 冲突后重新加载：走现有加载逻辑整体覆盖画布；dirty 时与导入一致先确认 */
-  const handleConflictReload = useCallback(() => {
-    if (dirty && !window.confirm('画布有未保存修改，重新加载将覆盖当前内容，确定继续？')) return;
+  const handleConflictReload = useCallback(async () => {
+    if (
+      dirty &&
+      !(await confirmDialog({
+        title: '重新加载并覆盖当前画布？',
+        description: '画布有未保存修改，重新加载将覆盖当前内容。',
+        confirmLabel: '重新加载',
+      }))
+    ) {
+      return;
+    }
     setConflict(null);
     handleRetryLoad();
   }, [dirty, handleRetryLoad]);
@@ -493,8 +508,8 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [busy, dirty, handleSave]);
 
-  function handleImportFile(file: File) {
-    if (!confirmImportOverwrite()) return;
+  async function handleImportFile(file: File) {
+    if (!(await confirmImportOverwrite())) return;
     void file
       .text()
       .then((raw) => {
@@ -585,7 +600,7 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
           className="hidden"
           onChange={(event) => {
             const file = event.target.files?.[0];
-            if (file) handleImportFile(file);
+            if (file) void handleImportFile(file);
             event.target.value = '';
           }}
         />
@@ -684,7 +699,7 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
                 size="sm"
                 disabled={busy}
                 title="丢弃本地画布改动，重新读取服务端最新版本"
-                onClick={handleConflictReload}
+                onClick={() => void handleConflictReload()}
               >
                 重新加载
               </Button>
@@ -708,8 +723,10 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
                 onDrop={onDrop}
                 fitView
                 deleteKeyCode={['Backspace', 'Delete']}
-                defaultEdgeOptions={{ style: { stroke: '#99938A', strokeWidth: 1.5 } }}
+                defaultEdgeOptions={{ style: { stroke: 'var(--sand-8)', strokeWidth: 1.5 } }}
               >
+                {/* Background/MiniMap 的颜色走 SVG 属性、不支持 CSS 变量：
+                    字面量与 index.css sand-6/sand-7 同步，改 token 时同步改这里 */}
                 <Background variant={BackgroundVariant.Dots} gap={24} size={1.6} color="#CCC8C0" />
                 <Controls />
                 <MiniMap

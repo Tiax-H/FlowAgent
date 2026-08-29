@@ -193,6 +193,110 @@ export function CopyButton({ text, label = '复制' }: { text: string; label?: s
   );
 }
 
+/** 确认对话框：基于 Modal，danger 时确认按钮用 danger 变体（红字），Esc 与取消均可关闭 */
+export function ConfirmDialog({
+  open,
+  title,
+  description,
+  confirmLabel = '确定',
+  cancelLabel = '取消',
+  danger = false,
+  onConfirm,
+  onCancel,
+}: {
+  open: boolean;
+  title: ReactNode;
+  description?: ReactNode;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  danger?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  if (!open) return null;
+  return (
+    <Modal title={title} onClose={onCancel} width="w-[24rem]">
+      {description && (
+        <p className="text-sm leading-relaxed text-muted-foreground">{description}</p>
+      )}
+      <div className="mt-4 flex justify-end gap-2">
+        <Button variant="secondary" onClick={onCancel}>
+          {cancelLabel}
+        </Button>
+        <Button variant={danger ? 'danger' : 'primary'} onClick={onConfirm}>
+          {confirmLabel}
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
+/* ---------- 命令式确认对话框：替代原生 confirm 的 confirmDialog() ---------- */
+
+interface ConfirmOptions {
+  title: ReactNode;
+  description?: ReactNode;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  danger?: boolean;
+}
+
+interface PendingConfirm extends ConfirmOptions {
+  resolve: (confirmed: boolean) => void;
+}
+
+let pendingConfirm: PendingConfirm | null = null;
+const confirmSubscribers = new Set<(pending: PendingConfirm | null) => void>();
+
+function publishConfirm(): void {
+  for (const notify of confirmSubscribers) notify(pendingConfirm);
+}
+
+function settleConfirm(confirmed: boolean): void {
+  const current = pendingConfirm;
+  pendingConfirm = null;
+  publishConfirm();
+  current?.resolve(confirmed);
+}
+
+/**
+ * 命令式确认对话框：Promise 化的原生 confirm 替代，resolve true=确认 / false=取消。
+ * 渲染载体是 App 根部挂载的 <ConfirmDialogHost />；同一时刻只保留最后一个请求，
+ * 被替换的请求按「取消」结算，避免 Promise 悬挂。
+ */
+export function confirmDialog(options: ConfirmOptions): Promise<boolean> {
+  pendingConfirm?.resolve(false);
+  return new Promise<boolean>((resolve) => {
+    pendingConfirm = { ...options, resolve };
+    publishConfirm();
+  });
+}
+
+/** 命令式确认对话框的宿主：在应用根部挂载一次，订阅并渲染 confirmDialog() 的请求 */
+export function ConfirmDialogHost() {
+  const [pending, setPending] = useState<PendingConfirm | null>(pendingConfirm);
+  useEffect(() => {
+    const notify = (next: PendingConfirm | null): void => setPending(next);
+    confirmSubscribers.add(notify);
+    return () => {
+      confirmSubscribers.delete(notify);
+    };
+  }, []);
+  if (!pending) return null;
+  return (
+    <ConfirmDialog
+      open
+      title={pending.title}
+      description={pending.description}
+      confirmLabel={pending.confirmLabel}
+      cancelLabel={pending.cancelLabel}
+      danger={pending.danger}
+      onConfirm={() => settleConfirm(true)}
+      onCancel={() => settleConfirm(false)}
+    />
+  );
+}
+
 /** 列表加载骨架条 */
 export function LoadingRows({ rows = 3 }: { rows?: number }) {
   return (

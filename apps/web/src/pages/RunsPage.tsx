@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { runsApi } from '../api/runs';
 import { formatDuration, formatListTime, shortenText } from '../lib/format';
 import type { RunSummaryWithFlags } from '../types';
-import { Button, EmptyState, LoadingRows, RunStatusBadge } from '../components/ui';
+import { Button, confirmDialog, EmptyState, LoadingRows, RunStatusBadge } from '../components/ui';
 
 /** fetch 错误中文化：网络层失败（TypeError）单独提示，其余透传原始消息 */
 function toUserMessage(cause: unknown): string {
@@ -80,9 +80,13 @@ export function RunsPage({
   }, [refresh]);
 
   async function handleDelete(run: RunSummaryWithFlags) {
-    if (!window.confirm(`删除运行「${run.workflowName}」？事件记录将一并移除，此操作不可恢复。`)) {
-      return;
-    }
+    const confirmed = await confirmDialog({
+      title: `删除运行「${run.workflowName}」？`,
+      description: '事件记录将一并移除，此操作不可恢复。',
+      confirmLabel: '删除',
+      danger: true,
+    });
+    if (!confirmed) return;
     setDeletingId(run.id);
     try {
       const result = await runsApi.remove(run.id);
@@ -161,11 +165,14 @@ export function RunsPage({
       ) : (
         <ul className="space-y-3">
           {visibleRuns.map((run) => (
-            <li key={run.id} className="flex items-center gap-2">
+            <li
+              key={run.id}
+              className="flex items-center gap-3 rounded-lg border border-border-soft bg-card p-3.5 shadow-xs transition-[border-color,box-shadow] hover:border-border-strong hover:shadow-sm"
+            >
               <button
                 type="button"
                 onClick={() => onOpenRun(run.id)}
-                className="min-w-0 flex-1 rounded-lg border border-border-soft bg-card p-3.5 text-left shadow-xs transition-[border-color,box-shadow] hover:border-border-strong hover:shadow-sm"
+                className="min-w-0 flex-1 text-left"
               >
                 <div className="flex items-center gap-3">
                   <span className="min-w-0 truncate text-sm font-medium">{run.workflowName}</span>
@@ -178,7 +185,9 @@ export function RunsPage({
                   </span>
                 </div>
                 <div className="mt-1 flex items-center gap-3 text-xs">
-                  <span className="shrink-0 tabular-nums text-faint">耗时 {runElapsed(run, now)}</span>
+                  <span className="shrink-0 tabular-nums text-faint">
+                    耗时 {runElapsed(run, now)}
+                  </span>
                   {run.status === 'failed' && (
                     <span
                       className="min-w-0 flex-1 truncate text-danger-11"
@@ -190,15 +199,27 @@ export function RunsPage({
                   )}
                 </div>
               </button>
-              <Button
-                variant="danger"
-                size="sm"
-                disabled={deletingId === run.id}
-                title="删除该运行记录"
-                onClick={() => void handleDelete(run)}
-              >
-                删除
-              </Button>
+              <span className="flex shrink-0 items-center gap-1">
+                {run.status === 'waiting_human' && (
+                  <button
+                    type="button"
+                    title="前往运行详情完成审批"
+                    onClick={() => onOpenRun(run.id)}
+                    className="shrink-0 rounded px-1.5 py-1 text-xs font-medium text-accent transition-colors hover:text-accent-hover"
+                  >
+                    去审批
+                  </button>
+                )}
+                <Button
+                  variant="danger"
+                  size="sm"
+                  disabled={deletingId === run.id}
+                  title="删除该运行记录"
+                  onClick={() => void handleDelete(run)}
+                >
+                  删除
+                </Button>
+              </span>
             </li>
           ))}
         </ul>

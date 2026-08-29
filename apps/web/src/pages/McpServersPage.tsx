@@ -2,7 +2,15 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { mcpApi, type McpServer, type McpTool } from '../api/mcp';
 import { RefreshIcon } from '../components/icons';
-import { Button, CopyButton, EmptyState, LoadingRows, Modal, StatusBadge } from '../components/ui';
+import {
+  Button,
+  confirmDialog,
+  CopyButton,
+  EmptyState,
+  LoadingRows,
+  Modal,
+  StatusBadge,
+} from '../components/ui';
 import type { StatusTone } from '../components/ui';
 
 const STATUS_TONES: Record<string, StatusTone> = {
@@ -206,7 +214,7 @@ export function McpServersPage() {
               <input
                 value={args}
                 onChange={(event) => setArgs(event.target.value)}
-                placeholder="Server 脚本的绝对路径（空格分隔多个参数）"
+                placeholder="绝对路径（空格分隔参数）"
                 className="h-8 rounded-md border border-input bg-card px-2.5 text-sm"
               />
               <Button variant="primary" disabled={busy || name.trim().length === 0 || command.trim().length === 0} onClick={() => void handleCreate()}>
@@ -287,13 +295,14 @@ export function McpServersPage() {
                   size="sm"
                   disabled={busy}
                   onClick={() => {
-                    if (
-                      window.confirm(
-                        `删除 MCP Server「${server.name}」？引用其工具的节点将无法运行，此操作不可恢复。`,
-                      )
-                    ) {
-                      void handleAction(() => mcpApi.removeServer(server.id));
-                    }
+                    void confirmDialog({
+                      title: `删除 MCP Server「${server.name}」？`,
+                      description: '引用其工具的节点将无法运行，此操作不可恢复。',
+                      confirmLabel: '删除',
+                      danger: true,
+                    }).then((confirmed) => {
+                      if (confirmed) void handleAction(() => mcpApi.removeServer(server.id));
+                    });
                   }}
                 >
                   删除

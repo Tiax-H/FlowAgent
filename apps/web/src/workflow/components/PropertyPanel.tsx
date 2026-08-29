@@ -18,8 +18,8 @@ import type {
 
 import { mcpApi, type McpTool } from '../../api/mcp';
 import { providersApi, type ProviderInfo } from '../../api/providers';
-import { XIcon } from '../../components/icons';
-import { Button } from '../../components/ui';
+import { CheckIcon, XIcon } from '../../components/icons';
+import { Button, confirmDialog } from '../../components/ui';
 import { NODE_TYPE_META } from '../types';
 
 /** 同画布其他节点的摘要，供「插入引用」生成 {{节点id.output}} */
@@ -459,6 +459,93 @@ function ModelPicker({
   );
 }
 
+/* ---------- Provider 连通性直达测试（Agent / LLM 共用，交互语义与设置页一致） ---------- */
+
+/** 连接测试状态机：idle → testing → ok/fail；失败原因原样展示 */
+type ProviderTestState =
+  | { phase: 'idle' }
+  | { phase: 'testing' }
+  | { phase: 'ok'; latencyMs?: number }
+  | { phase: 'fail'; message: string };
+
+/** Provider 与模型都已填写时显示「测试连通」；结果行内即时反馈，宽度自适应不挤压表单 */
+function ProviderTestRow({ provider, model }: { provider: string; model: string }) {
+  const [test, setTest] = useState<ProviderTestState>({ phase: 'idle' });
+  /** 请求序号：provider/model 在请求途中被修改时使旧响应失效 */
+  const requestSeqRef = useRef(0);
+  const ready = provider.trim() !== '' && model.trim() !== '';
+
+  // 表单值变化即失效回 idle，避免展示与新配置无关的旧结果
+  useEffect(() => {
+    requestSeqRef.current += 1;
+    setTest({ phase: 'idle' });
+  }, [provider, model]);
+
+  if (!ready) return null;
+
+  function handleTest(): void {
+    if (test.phase === 'testing') return;
+    const seq = requestSeqRef.current + 1;
+    requestSeqRef.current = seq;
+    setTest({ phase: 'testing' });
+    void providersApi
+      .test(provider.trim(), model.trim())
+      .then((result) => {
+        if (requestSeqRef.current !== seq) return;
+        if (result.ok) setTest({ phase: 'ok', latencyMs: result.latencyMs });
+        else setTest({ phase: 'fail', message: result.message ?? '连接失败' });
+      })
+      .catch((cause: unknown) => {
+        // 接口不可用（旧后端 404）/网络错误都如实按失败呈现
+        if (requestSeqRef.current !== seq) return;
+        setTest({
+          phase: 'fail',
+          message: cause instanceof Error ? cause.message : String(cause),
+        });
+      });
+  }
+
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-2">
+      <Button
+        variant="ghost"
+        size="sm"
+        className="shrink-0"
+        disabled={test.phase === 'testing'}
+        onClick={handleTest}
+      >
+        测试连通
+      </Button>
+      {test.phase === 'testing' && (
+        <span className="inline-flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <span
+            className="h-2.5 w-2.5 shrink-0 animate-spin rounded-full border border-sand-6 border-t-sand-9"
+            aria-hidden
+          />
+          测试中…
+        </span>
+      )}
+      {test.phase === 'ok' && (
+        <span className="inline-flex min-w-0 items-center gap-1 text-xs text-success-11">
+          <CheckIcon />
+          <span className="min-w-0 truncate">
+            连接正常{test.latencyMs != null ? ` · ${test.latencyMs}ms` : ''}
+          </span>
+        </span>
+      )}
+      {test.phase === 'fail' && (
+        <span
+          className="inline-flex min-w-0 flex-1 items-center gap-1.5 text-xs text-danger-11"
+          title={test.message}
+        >
+          <span className="h-2 w-2 shrink-0 rounded-full bg-danger-9" aria-hidden />
+          <span className="min-w-0 flex-1 truncate">{test.message}</span>
+        </span>
+      )}
+    </div>
+  );
+}
+
 /* ---------- Tool 参数表单化：从 MCP inputSchema 收窄出可渲染的字段 ---------- */
 
 interface ParsedToolProperty {
@@ -742,6 +829,7 @@ function AgentForm({
           providers={providers}
         />
       </Field>
+      <ProviderTestRow provider={data.provider ?? ''} model={data.model ?? ''} />
       <Field label="System Prompt" hint="设定角色与行为约束">
         <TextArea
           value={data.systemPrompt ?? ''}
@@ -840,6 +928,7 @@ function LlmForm({
           providers={providers}
         />
       </Field>
+      <ProviderTestRow provider={data.provider ?? ''} model={data.model ?? ''} />
       <PromptField
         label="提示词"
         hint="运行时注入上游输出"
@@ -1018,7 +1107,14 @@ export function PropertyPanel({ node, onChange, onDelete, peerNodes }: PropertyP
           size="sm"
           className="ml-auto"
           onClick={() => {
-            if (window.confirm(`删除节点「${data.name}」及其连线？`)) onDelete();
+            void confirmDialog({
+              title: `删除节点「${data.name}」？`,
+              description: '与该节点相连的连线将一并删除，可用 Ctrl+Z 撤销。',
+              confirmLabel: '删除',
+              danger: true,
+            }).then((confirmed) => {
+              if (confirmed) onDelete();
+            });
           }}
         >
           删除节点
@@ -1134,8 +1230,18 @@ export function PropertyPanel({ node, onChange, onDelete, peerNodes }: PropertyP
                 onClick={() => {
                   const subgraph = (data as unknown as LoopNodeData).subgraph;
                   const hasContent = Array.isArray(subgraph?.nodes) && subgraph.nodes.length > 0;
-                  if (hasContent && !window.confirm('已有子图内容，确定覆盖为骨架？')) return;
-                  onChange({ subgraph: buildSubgraphSkeleton() });
+                  if (!hasContent) {
+                    onChange({ subgraph: buildSubgraphSkeleton() });
+                    return;
+                  }
+                  void confirmDialog({
+                    title: '覆盖已有子图内容？',
+                    description: '当前子图将被替换为 start → end 骨架，覆盖后无法恢复。',
+                    confirmLabel: '覆盖',
+                    danger: true,
+                  }).then((confirmed) => {
+                    if (confirmed) onChange({ subgraph: buildSubgraphSkeleton() });
+                  });
                 }}
                 className="rounded-md border border-input bg-card px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               >
