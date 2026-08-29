@@ -17,6 +17,26 @@ interface RunRow {
   startedAt: Date | null;
   endedAt: Date | null;
   createdAt: Date;
+  /** 软删标记：非空表示已被用户删除（列表/详情/SSE 一律按 404 处理） */
+  hiddenAt: Date | null;
+}
+
+/** 控制面意图：暂停/取消已请求但尚未生效（引擎内存标志，进程重启后丢失） */
+export interface RunControlIntent {
+  pauseRequested: boolean;
+  cancelRequested: boolean;
+}
+
+/**
+ * 运行详情 DTO = 共享 RunSummary + 控制面意图标志。
+ * pauseRequested/cancelRequested 仅在「已请求但尚未生效」时为 true（缺省即 false），
+ * 前端据此展示「暂停已请求，将在当前节点结束后生效」。
+ */
+export interface RunDetailSummary extends RunSummary {
+  /** 暂停已请求但尚未生效：将在当前节点结束后落 RUN_SUSPENDED */
+  pauseRequested?: boolean;
+  /** 取消已请求但尚未生效：将在当前节点结束后落 RUN_CANCELED */
+  cancelRequested?: boolean;
 }
 
 function parseJson<T>(raw: string | null, fallback: T): T {
@@ -33,6 +53,8 @@ export class RunsService implements OnModuleInit {
   private readonly logger = new Logger(RunsService.name);
   /** 引擎注册的启动回调（避免循环依赖由 EngineModule 桥接 set） */
   private runStarter: ((runId: string) => Promise<void>) | null = null;
+  /** 引擎注册的控制面意图查询（避免循环依赖由 EngineModule 桥接 set） */
+  private controlIntentProvider: ((runId: string) => RunControlIntent) | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -48,6 +70,18 @@ export class RunsService implements OnModuleInit {
 
   setRunStarter(starter: (runId: string) => Promise<void>): void {
     this.runStarter = starter;
+  }
+
+  /** 引擎桥接：注册控制面意图查询（EngineModule.onModuleInit 调用） */
+  setControlIntentProvider(provider: (runId: string) => RunControlIntent): void {
+    this.controlIntentProvider = provider;
+  }
+
+  /** 读取 run 的控制面意图；引擎未桥接（单测/降级场景）时一律 false */
+  private controlIntent(runId: string): RunControlIntent {
+    const provider = this.controlIntentProvider;
+    if (!provider) return { pauseRequested: false, cancelRequested: false };
+    return provider(runId);
   }
 
   /** 启动一次运行：落库（含定义快照）+ 交给引擎执行 */
@@ -82,10 +116,11 @@ export class RunsService implements OnModuleInit {
    * 列表页每 3 秒轮询，绝不能逐 run 全量回放事件（那是 O(runs × events) 的放大器）；
    * 节点级明细留给详情页（getRun）。缓存列在运行中由控制面动作刷新，
    * 状态变化粒度（running→终态）对本页足够。
+   * 软删（hiddenAt 非空）的 run 不出现在列表中。
    */
-  async listRuns(workflowId?: string): Promise<RunSummary[]> {
+  async listRuns(workflowId?: string): Promise<RunDetailSummary[]> {
     const rows = await this.prisma.workflowRun.findMany({
-      where: workflowId ? { workflowId } : undefined,
+      where: workflowId ? { workflowId, hiddenAt: null } : { hiddenAt: null },
       orderBy: { createdAt: 'desc' },
       take: 100,
     });
@@ -104,9 +139,8 @@ export class RunsService implements OnModuleInit {
     return { id: row.id, status: row.status };
   }
 
-  async getRun(runId: string): Promise<RunSummary> {
-    const row = await this.prisma.workflowRun.findUnique({ where: { id: runId } });
-    if (!row) throw new NotFoundException(`运行不存在: ${runId}`);
+  async getRun(runId: string): Promise<RunDetailSummary> {
+    const row = await this.ensureRun(runId);
     const workflow = await this.prisma.workflow.findUnique({
       where: { id: row.workflowId },
       select: { name: true },
@@ -119,16 +153,36 @@ export class RunsService implements OnModuleInit {
     return this.eventStore.readEvents(runId);
   }
 
+  /**
+   * 运行存在性校验的唯一入口：不存在或已软删（hiddenAt 非空）一律 404，
+   * 详情/事件/SSE/控制面动作共用，保证已删 run 对外完全不可见。
+   */
   async ensureRun(runId: string): Promise<RunRow> {
     const row = await this.prisma.workflowRun.findUnique({ where: { id: runId } });
     if (!row) throw new NotFoundException(`运行不存在: ${runId}`);
+    if (row.hiddenAt !== null) throw new NotFoundException(`运行已删除: ${runId}`);
     return row;
   }
 
+  /**
+   * 删除运行（软删）：仅给投影缓存行打 hiddenAt 标记。
+   * 硬约束：事件表 append-only，禁止 UPDATE/DELETE——删除不做任何事件清理，
+   * 列表/详情/SSE 经 ensureRun/listRuns 过滤后按 404 处理。
+   */
+  async deleteRun(runId: string): Promise<void> {
+    await this.ensureRun(runId);
+    await this.prisma.workflowRun.update({
+      where: { id: runId },
+      data: { hiddenAt: new Date() },
+    });
+  }
+
   /** 用事件投影刷新 run 的缓存字段（引擎在终止事件后调用）；可传入已算好的投影省一次回放 */
-  async syncFromProjection(runId: string, state?: ReturnType<typeof projectRunState>): Promise<void> {
-    const projected =
-      state ?? projectRunState(runId, await this.eventStore.readEvents(runId));
+  async syncFromProjection(
+    runId: string,
+    state?: ReturnType<typeof projectRunState>,
+  ): Promise<void> {
+    const projected = state ?? projectRunState(runId, await this.eventStore.readEvents(runId));
     await this.prisma.workflowRun
       .update({
         where: { id: runId },
@@ -146,7 +200,7 @@ export class RunsService implements OnModuleInit {
   /** 崩溃对账：DB 缓存为 pending/running 的孤儿 run，若事件流仍非终态则追加 RUN_SUSPENDED(crash) */
   private async reconcileOrphanRuns(): Promise<void> {
     const orphans = await this.prisma.workflowRun.findMany({
-      where: { status: { in: ['pending', 'running'] } },
+      where: { status: { in: ['pending', 'running'] }, hiddenAt: null },
       select: { id: true },
     });
     for (const orphan of orphans) {
@@ -161,8 +215,8 @@ export class RunsService implements OnModuleInit {
   }
 
   /** 纯缓存列摘要（列表页）：nodes 为空，节点明细见 getRun */
-  private toCachedSummary(row: RunRow, workflowName: string): RunSummary {
-    return {
+  private toCachedSummary(row: RunRow, workflowName: string): RunDetailSummary {
+    const summary: RunDetailSummary = {
       id: row.id,
       workflowId: row.workflowId,
       workflowName,
@@ -176,9 +230,18 @@ export class RunsService implements OnModuleInit {
       endedAt: row.endedAt ? row.endedAt.toISOString() : null,
       waitingHuman: null,
     };
+    this.applyControlIntent(summary, row.id);
+    return summary;
   }
 
-  private async toSummary(row: RunRow, workflowName: string): Promise<RunSummary> {
+  /** 暴露控制面意图：仅「已请求但尚未生效」时置 true（缺省即 false，避免前端把常态当状态展示） */
+  private applyControlIntent(summary: RunDetailSummary, runId: string): void {
+    const intent = this.controlIntent(runId);
+    if (intent.pauseRequested) summary.pauseRequested = true;
+    if (intent.cancelRequested) summary.cancelRequested = true;
+  }
+
+  private async toSummary(row: RunRow, workflowName: string): Promise<RunDetailSummary> {
     const events = await this.eventStore.readEvents(row.id);
     const state = events.length > 0 ? projectRunState(row.id, events) : emptyRunState(row.id);
 
@@ -191,7 +254,7 @@ export class RunsService implements OnModuleInit {
       error: node.error,
     }));
 
-    return {
+    const summary: RunDetailSummary = {
       id: row.id,
       workflowId: row.workflowId,
       workflowName,
@@ -205,6 +268,8 @@ export class RunsService implements OnModuleInit {
       endedAt: state.endedAt,
       waitingHuman: this.resolveWaitingHuman(state, events, nodeMetas),
     };
+    this.applyControlIntent(summary, row.id);
+    return summary;
   }
 
   /** waiting_human 时从最后一条 HUMAN_WAITING 事件提取挂起节点摘要 */

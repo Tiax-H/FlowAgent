@@ -36,6 +36,9 @@ model WorkflowRun {
   startedAt        DateTime?
   endedAt          DateTime?
   createdAt        DateTime  @default(now())
+  /// 软删标记：非空表示用户已删除该 run（列表/详情/SSE 一律按 404 处理）。
+  /// 事件表 append-only（禁止 UPDATE/DELETE），删除不做任何事件清理。
+  hiddenAt         DateTime?
 
   @@index([workflowId])
   @@map("workflow_runs")

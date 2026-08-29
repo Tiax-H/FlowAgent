@@ -1,7 +1,12 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query } from '@nestjs/common';
 
 import { WorkflowService } from './workflow.service';
-import type { CreateWorkflowDto, UpdateWorkflowDto, WorkflowResponseDto } from './dto/workflow.dto';
+import type {
+  CreateWorkflowDto,
+  UpdateWorkflowDto,
+  WorkflowListItemDto,
+  WorkflowResponseDto,
+} from './dto/workflow.dto';
 
 @Controller('workflows')
 export class WorkflowController {
@@ -12,9 +17,10 @@ export class WorkflowController {
     return this.workflowService.create(body);
   }
 
+  /** 列表不返回 definition；search 按 name contains 过滤（大小写不敏感） */
   @Get()
-  async findAll(): Promise<WorkflowResponseDto[]> {
-    return this.workflowService.findAll();
+  async findAll(@Query('search') search?: string): Promise<WorkflowListItemDto[]> {
+    return this.workflowService.findAll(search);
   }
 
   @Get(':id')

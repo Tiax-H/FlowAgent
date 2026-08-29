@@ -11,7 +11,9 @@ import {
   useReactFlow,
   type Connection,
   type Edge,
+  type EdgeChange,
   type Node,
+  type NodeChange,
   type NodeMouseHandler,
 } from '@xyflow/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -34,9 +36,22 @@ interface EditorProps {
   workflowId: string | null;
   onBack: () => void;
   onRun: (workflowId: string | null) => void;
+  /** dirty 状态上报给导航层（App）：顶部导航/路由切换在 dirty 时先确认再离开 */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
-function EditorCanvas({ workflowId, onBack, onRun }: EditorProps) {
+/** 一次可撤销的删除命令：被删节点 + 相连的边 */
+interface DeletionCommand {
+  nodes: Node[];
+  edges: Edge[];
+  /** 提示条文案，如「节点 开始、LLM」或「连线」 */
+  label: string;
+}
+
+/** 命令栈深度上限，防止长会话内存膨胀 */
+const MAX_UNDO_ENTRIES = 50;
+
+function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [record, setRecord] = useState<WorkflowRecord | null>(null);
@@ -51,8 +66,71 @@ function EditorCanvas({ workflowId, onBack, onRun }: EditorProps) {
   const { screenToFlowPosition, fitView } = useReactFlow();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  /** 删除命令栈（仅最近 N 次），Ctrl+Z / 提示条撤销最近一次 */
+  const undoStackRef = useRef<DeletionCommand[]>([]);
+  const [lastDeletion, setLastDeletion] = useState<DeletionCommand | null>(null);
+
+  const pushDeletion = useCallback((command: DeletionCommand) => {
+    const stack = undoStackRef.current;
+    stack.push(command);
+    if (stack.length > MAX_UNDO_ENTRIES) stack.shift();
+    setLastDeletion(command);
+  }, []);
+
+  const undoDelete = useCallback(() => {
+    const command = undoStackRef.current.pop();
+    if (!command) return;
+    setNodes((current) => [
+      ...current.filter((node) => !command.nodes.some((removed) => removed.id === node.id)),
+      ...command.nodes,
+    ]);
+    setEdges((current) => [
+      ...current.filter((edge) => !command.edges.some((removed) => removed.id === edge.id)),
+      ...command.edges,
+    ]);
+    setLastDeletion(undoStackRef.current[undoStackRef.current.length - 1] ?? null);
+  }, [setNodes, setEdges]);
+
+  // 提示条自动消失；撤销后由 undoDelete 重置为上一条或 null
+  useEffect(() => {
+    if (!lastDeletion) return;
+    const timer = window.setTimeout(() => setLastDeletion(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [lastDeletion]);
+
+  // Ctrl/Cmd+Z 撤销最近一次删除（输入框内的撤销交还给原生行为）
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey) return;
+      if (event.key !== 'z' && event.key !== 'Z') return;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (undoStackRef.current.length === 0) return;
+      event.preventDefault();
+      undoDelete();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [undoDelete]);
+
+  const nodeDisplayName = useCallback((node: Node): string => {
+    const name = node.data?.['name'];
+    return typeof name === 'string' && name.trim() !== '' ? name : node.id;
+  }, []);
+
   useEffect(() => {
     setLoadError(null);
+    // 切换工作流（或新建）：清空撤销栈，避免把上一个画布的节点恢复回来
+    undoStackRef.current = [];
+    setLastDeletion(null);
     if (workflowId === null) {
       setRecord(null);
       setName('未命名工作流');
@@ -129,6 +207,51 @@ function EditorCanvas({ workflowId, onBack, onRun }: EditorProps) {
     [setNodes],
   );
 
+  /** 包一层删除捕获：键盘/框选删除节点时记入命令栈，供撤销 */
+  const handleNodesChange = useCallback(
+    (changes: NodeChange<Node>[]) => {
+      const removedIds = changes.flatMap((change) =>
+        change.type === 'remove' ? [change.id] : [],
+      );
+      if (removedIds.length > 0) {
+        const idSet = new Set(removedIds);
+        const removedNodes = nodes
+          .filter((node) => idSet.has(node.id))
+          .map((node) => ({ ...node, selected: false }));
+        const removedEdges = edges.filter(
+          (edge) => idSet.has(edge.source) || idSet.has(edge.target),
+        );
+        if (removedNodes.length > 0) {
+          pushDeletion({
+            nodes: removedNodes,
+            edges: removedEdges,
+            label: `节点 ${removedNodes.map(nodeDisplayName).join('、')}`,
+          });
+        }
+      }
+      onNodesChange(changes);
+    },
+    [nodes, edges, onNodesChange, pushDeletion, nodeDisplayName],
+  );
+
+  /** 包一层删除捕获：单独删除连线时记入命令栈 */
+  const handleEdgesChange = useCallback(
+    (changes: EdgeChange<Edge>[]) => {
+      const removedIds = changes.flatMap((change) =>
+        change.type === 'remove' ? [change.id] : [],
+      );
+      if (removedIds.length > 0) {
+        const idSet = new Set(removedIds);
+        const removedEdges = edges.filter((edge) => idSet.has(edge.id));
+        if (removedEdges.length > 0) {
+          pushDeletion({ nodes: [], edges: removedEdges, label: '连线' });
+        }
+      }
+      onEdgesChange(changes);
+    },
+    [edges, onEdgesChange, pushDeletion],
+  );
+
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
@@ -154,12 +277,20 @@ function EditorCanvas({ workflowId, onBack, onRun }: EditorProps) {
 
   const handleDelete = useCallback(
     (nodeId: string) => {
+      const removedNode = nodes.find((node) => node.id === nodeId);
+      if (removedNode) {
+        pushDeletion({
+          nodes: [{ ...removedNode, selected: false }],
+          edges: edges.filter((edge) => edge.source === nodeId || edge.target === nodeId),
+          label: `节点 ${nodeDisplayName(removedNode)}`,
+        });
+      }
       setNodes((current) => current.filter((node) => node.id !== nodeId));
       setEdges((current) =>
         current.filter((edge) => edge.source !== nodeId && edge.target !== nodeId),
       );
     },
-    [setNodes, setEdges],
+    [nodes, edges, setNodes, setEdges, pushDeletion, nodeDisplayName],
   );
 
   const definition = useMemo(
@@ -227,7 +358,14 @@ function EditorCanvas({ workflowId, onBack, onRun }: EditorProps) {
     return () => window.removeEventListener('beforeunload', guard);
   }, [dirty]);
 
-  const confirmLeave = (): boolean => !dirty || window.confirm('有未保存的修改，确定离开？');
+  // dirty 状态上报导航层：顶部导航 / 任意路由切换在 dirty 时先确认再离开
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  /** 导入会用文件内容整体覆盖画布：dirty 时先确认 */
+  const confirmImportOverwrite = (): boolean =>
+    !dirty || window.confirm('画布有未保存修改，导入将覆盖当前内容，确定继续？');
 
   /** 保存：返回保存后的记录（含 id/version）；校验或请求失败返回 null */
   const handleSave = useCallback(async (): Promise<WorkflowRecord | null> => {
@@ -273,6 +411,7 @@ function EditorCanvas({ workflowId, onBack, onRun }: EditorProps) {
   }, [busy, dirty, handleSave]);
 
   function handleImportFile(file: File) {
+    if (!confirmImportOverwrite()) return;
     void file
       .text()
       .then((raw) => {
@@ -327,16 +466,17 @@ function EditorCanvas({ workflowId, onBack, onRun }: EditorProps) {
       <header className="flex items-center gap-3 border-b border-neutral-200 bg-white px-4 py-2">
         <button
           type="button"
-          onClick={() => {
-            if (confirmLeave()) onBack();
-          }}
+          onClick={onBack}
+          title={dirty ? '画布有未保存修改，离开前会先确认' : undefined}
           className="rounded px-2 py-1 text-sm text-neutral-600 hover:bg-neutral-100"
         >
           ← 返回{dirty ? ' •' : ''}
         </button>
         <input
           value={name}
+          maxLength={100}
           onChange={(event) => setName(event.target.value)}
+          title="工作流名称（最多 100 字）"
           className="w-56 rounded border border-transparent px-2 py-1 text-sm font-medium hover:border-neutral-300 focus:border-neutral-400 focus:outline-none"
         />
         {record && <span className="text-xs text-neutral-400">v{record.version}</span>}
@@ -440,8 +580,8 @@ function EditorCanvas({ workflowId, onBack, onRun }: EditorProps) {
                 nodes={nodes}
                 edges={edges}
                 nodeTypes={nodeTypes}
-                onNodesChange={onNodesChange}
-                onEdgesChange={onEdgesChange}
+                onNodesChange={handleNodesChange}
+                onEdgesChange={handleEdgesChange}
                 onConnect={onConnect}
                 onNodeClick={onNodeClick}
                 onPaneClick={() =>
@@ -460,6 +600,21 @@ function EditorCanvas({ workflowId, onBack, onRun }: EditorProps) {
                 <div className="pointer-events-none absolute inset-x-0 top-[26%] z-10 flex justify-center">
                   <div className="rounded-lg border border-neutral-200 bg-white/70 px-5 py-3 text-center text-xs text-neutral-500 shadow-sm backdrop-blur-[1px]">
                     从左侧面板添加步骤：LLM / 工具 / 条件 / 循环 / 人工审批…
+                  </div>
+                </div>
+              )}
+              {lastDeletion && (
+                <div className="absolute bottom-4 left-1/2 z-10 -translate-x-1/2">
+                  <div className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-xs text-neutral-600 shadow-md">
+                    <span>已删除{lastDeletion.label}</span>
+                    <button
+                      type="button"
+                      onClick={undoDelete}
+                      title="撤销最近一次删除（Ctrl+Z）"
+                      className="rounded border border-neutral-300 bg-white px-1.5 py-0.5 font-medium text-neutral-700 transition-colors hover:bg-neutral-100"
+                    >
+                      撤销 (Ctrl+Z)
+                    </button>
                   </div>
                 </div>
               )}

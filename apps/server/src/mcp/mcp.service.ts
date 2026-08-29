@@ -1,4 +1,5 @@
 import {
+  BadGatewayException,
   BadRequestException,
   ConflictException,
   Injectable,
@@ -9,7 +10,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import type { CreateMcpServerDto, McpServerResponseDto, McpToolResponseDto } from './dto/mcp.dto';
 import { McpConnector } from './mcp.connector';
-import { McpRegistryService } from './mcp.registry';
+import { McpRegistryService, McpToolCallError } from './mcp.registry';
 
 interface McpServerRow {
   id: string;
@@ -113,8 +114,48 @@ export class McpService {
     return rows.map((row) => this.toToolResponse(row, row.server.name));
   }
 
-  async invokeTool(server: string, tool: string, args: Record<string, unknown> | undefined) {
-    return this.registry.callTool(server, tool, args ?? {});
+  /**
+   * 调试面板工具调用：所有可预期失败都映射为带中文说明的 HTTP 语义，
+   * 绝不裸 500 —— 未知 server/tool → 404，未连接/调用失败 → 502。
+   */
+  async invokeTool(
+    server: string,
+    tool: string,
+    args: Record<string, unknown> | undefined,
+  ): Promise<{ ok: boolean; result: unknown }> {
+    if (
+      typeof server !== 'string' ||
+      server.trim().length === 0 ||
+      typeof tool !== 'string' ||
+      tool.trim().length === 0
+    ) {
+      throw new BadRequestException('server 与 tool 必须为非空字符串');
+    }
+
+    const row = await this.prisma.mcpServer.findUnique({ where: { name: server } });
+    if (!row) throw new NotFoundException(`Server “${server}” 不存在或未连接`);
+
+    if (!this.registry.isServerConnected(row.id)) {
+      throw new BadGatewayException(`Server “${server}” 未连接，请先在设置中重连后再调用`);
+    }
+
+    const toolRow = await this.prisma.mcpTool.findFirst({
+      where: { serverId: row.id, name: tool },
+    });
+    if (!toolRow) {
+      throw new NotFoundException(`Server “${server}” 上不存在工具 “${tool}”`);
+    }
+
+    try {
+      return await this.registry.callTool(server, tool, args ?? {});
+    } catch (error) {
+      if (error instanceof McpToolCallError) {
+        if (error.reason === 'server_not_found') throw new NotFoundException(error.message);
+        throw new BadGatewayException(error.message);
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      throw new BadGatewayException(`MCP 工具调用失败: ${message}`);
+    }
   }
 
   private toServerResponse(

@@ -53,7 +53,23 @@ export interface NodePayloadBase {
   nodeType: string;
 }
 
-export interface NodeFailedPayload extends NodePayloadBase {
+/**
+ * 错误归类扩展字段（全部可选，向后兼容旧事件）。
+ *
+ * `error` 一律为中文一句话摘要（不含上游原文与账号标识）；
+ * 上游响应原文只允许以截断脱敏摘录进入 `upstreamExcerpt`（≤200 字符）。
+ */
+export interface ErrorClassificationFields {
+  /** 机器可读归类：model_not_found / auth / rate_limited / upstream_error / timeout / network 等 */
+  errorCategory?: string;
+  /** 中文一句话提示，可直接展示给用户 */
+  errorHint?: string;
+  /** 上游响应原文截断脱敏摘录（≤200 字符），仅供诊断 */
+  upstreamExcerpt?: string;
+}
+
+export interface NodeFailedPayload extends NodePayloadBase, ErrorClassificationFields {
+  /** 中文一句话失败摘要（不含上游原文与账号标识） */
   error: string;
 }
 
@@ -61,12 +77,18 @@ export interface NodeSucceededPayload extends NodePayloadBase {
   output: unknown;
 }
 
-export interface NodeRetryingPayload extends NodePayloadBase {
+export interface NodeRetryingPayload extends NodePayloadBase, ErrorClassificationFields {
   /** 即将执行的尝试序号（从 2 开始，1 为首次失败） */
   attempt: number;
   maxAttempts: number;
   /** 本次重试前的退避等待（毫秒） */
   delayMs: number;
+  /** 中文一句话失败摘要（不含上游原文与账号标识） */
+  error: string;
+}
+
+export interface RunFailedPayload extends ErrorClassificationFields {
+  /** 中文一句话失败摘要（不含上游原文与账号标识） */
   error: string;
 }
 

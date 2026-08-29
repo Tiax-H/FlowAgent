@@ -2,6 +2,17 @@ import type { HumanInputRequest, RunSummary, WorkflowEvent } from '@flowagent/sh
 
 import type { WorkflowRecord } from '../workflow/types';
 
+/** 带 HTTP 状态码的错误：调用方据此区分 404（不存在）等场景 */
+export class HttpError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'HttpError';
+    this.status = status;
+  }
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
@@ -17,7 +28,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   }
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as { message?: string } | null;
-    throw new Error(body?.message ?? `HTTP ${response.status}`);
+    throw new HttpError(body?.message ?? `HTTP ${response.status}`, response.status);
   }
   return (await response.json()) as T;
 }
@@ -40,6 +51,24 @@ export const runsApi = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  /** 删除运行（DELETE /api/runs/:id → 204）；404 返回 missing，由调用方提示「已不存在」 */
+  remove: async (runId: string): Promise<'deleted' | 'missing'> => {
+    let response: Response;
+    try {
+      response = await fetch(`/api/runs/${runId}`, { method: 'DELETE' });
+    } catch (cause) {
+      if (cause instanceof TypeError) {
+        throw new Error('无法连接服务器，请确认 server 已启动（pnpm dev）');
+      }
+      throw cause;
+    }
+    if (response.status === 404) return 'missing';
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as { message?: string } | null;
+      throw new Error(body?.message ?? `HTTP ${response.status}`);
+    }
+    return 'deleted';
+  },
 };
 
 export type { RunSummary, WorkflowEvent, WorkflowRecord };

@@ -192,13 +192,14 @@ export function McpServersPage() {
               </Button>
             </div>
             <p className="mt-2 text-xs leading-relaxed text-neutral-400">
-              参数必须是<b>绝对路径</b>（stdio 子进程按 server 进程的工作目录解析相对路径）。项目自带的 demo Server 在构建后位于：
-              <code className="mx-1 rounded bg-neutral-100 px-1">servers/search/dist/index.js</code>
-              <code className="mx-1 rounded bg-neutral-100 px-1">servers/sandbox/dist/index.js</code>
-              <code className="mx-1 rounded bg-neutral-100 px-1">servers/report/dist/index.js</code>
-              ，前面拼上仓库的绝对路径即可。示例：
+              参数必须是<b>绝对路径</b>（stdio 子进程按 server 进程的工作目录解析相对路径）。项目自带的 demo Server 位于仓库根目录下
+              <code className="mx-1 rounded bg-neutral-100 px-1">servers/search</code>
+              <code className="mx-1 rounded bg-neutral-100 px-1">servers/sandbox</code>
+              <code className="mx-1 rounded bg-neutral-100 px-1">servers/report</code>
+              ，构建后取各自的 <code className="rounded bg-neutral-100 px-1">dist/index.js</code>
+              ，前面拼上你本仓库的绝对路径即可。示例（复制后把 {'<仓库绝对路径>'} 替换成实际路径）：
               <CopyButton
-                text="node F:\\Project\\FlowAgent\\servers\\search\\dist\\index.js"
+                text="node <仓库绝对路径>/servers/search/dist/index.js"
                 label="复制 search 示例"
               />
             </p>

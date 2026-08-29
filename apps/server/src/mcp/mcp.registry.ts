@@ -16,6 +16,24 @@ interface ManagedConnection {
   cleanup: () => void;
 }
 
+/** 工具调用失败原因（HTTP 层据此映射状态码：not_found→404，not_connected/call_failed→502） */
+export type McpCallFailureReason = 'server_not_found' | 'server_not_connected' | 'call_failed';
+
+/**
+ * 工具调用路由错误：message 为中文人话（可直接进事件流），
+ * reason 供 controller/service 映射 HTTP 状态码，避免裸 500。
+ */
+export class McpToolCallError extends Error {
+  constructor(
+    message: string,
+    public readonly reason: McpCallFailureReason,
+    public readonly underlying?: unknown,
+  ) {
+    super(message);
+    this.name = 'McpToolCallError';
+  }
+}
+
 @Injectable()
 export class McpRegistryService implements OnModuleDestroy {
   private readonly logger = new Logger(McpRegistryService.name);
@@ -151,19 +169,31 @@ export class McpRegistryService implements OnModuleDestroy {
     }
   }
 
-  /** 工具调用统一路由入口 */
+  /** 工具调用统一路由入口（失败一律抛 McpToolCallError，message 为中文） */
   async callTool(
     serverName: string,
     tool: string,
     args: Record<string, unknown>,
   ): Promise<{ ok: boolean; result: unknown }> {
     const server = await this.prisma.mcpServer.findUnique({ where: { name: serverName } });
-    if (!server) throw new Error(`MCP Server 不存在: ${serverName}`);
+    if (!server) {
+      throw new McpToolCallError(`Server “${serverName}” 不存在或未连接`, 'server_not_found');
+    }
 
     const connection = this.connections.get(server.id);
-    if (!connection) throw new Error(`MCP Server 未连接: ${serverName}（先连接再调用）`);
+    if (!connection) {
+      throw new McpToolCallError(
+        `Server “${serverName}” 未连接，请先在设置中重连后再调用`,
+        'server_not_connected',
+      );
+    }
 
-    return this.connector.callTool(connection.handle.client, tool, args);
+    try {
+      return await this.connector.callTool(connection.handle.client, tool, args);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new McpToolCallError(`工具 “${tool}” 调用失败: ${message}`, 'call_failed', error);
+    }
   }
 
   isServerConnected(serverId: string): boolean {

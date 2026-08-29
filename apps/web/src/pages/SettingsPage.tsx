@@ -58,31 +58,124 @@ function ZeroConfigGuide() {
   );
 }
 
-/** 单个已配置 Provider 卡片：等宽名称徽标 + 模型 chips + 右上角「已生效」点 */
+/** 连接测试状态机：idle → testing → ok/fail；状态必须诚实，失败原因原样展示 */
+type TestState =
+  | { phase: 'idle' }
+  | { phase: 'testing' }
+  | { phase: 'ok'; latencyMs?: number }
+  | { phase: 'fail'; message: string };
+
+/** 单个已配置 Provider 卡片：等宽名称徽标 + 模型 chips + 中性「已加载」点 + 测试连接区 */
 function ProviderCard({ provider }: { provider: ProviderInfo }) {
+  const [model, setModel] = useState<string>(provider.models[0] ?? '');
+  const [manualModel, setManualModel] = useState('');
+  const [test, setTest] = useState<TestState>({ phase: 'idle' });
+
+  async function handleTest() {
+    if (test.phase === 'testing') return;
+    const target = (provider.models.length > 0 ? model : manualModel).trim();
+    if (!target) {
+      setTest({ phase: 'fail', message: '请先选择或填写要测试的模型名' });
+      return;
+    }
+    setTest({ phase: 'testing' });
+    try {
+      const result = await providersApi.test(provider.name, target);
+      if (result.ok) {
+        setTest({ phase: 'ok', latencyMs: result.latencyMs });
+      } else {
+        setTest({ phase: 'fail', message: result.message ?? '连接失败' });
+      }
+    } catch (cause) {
+      // 接口不可用（旧后端 404）/网络错误都如实按失败呈现
+      setTest({
+        phase: 'fail',
+        message: cause instanceof Error ? cause.message : String(cause),
+      });
+    }
+  }
+
   return (
     <article className="rounded-lg border border-neutral-200 bg-white p-4">
       <header className="flex items-center gap-3">
         <span className="rounded bg-neutral-100 px-2 py-0.5 font-mono text-sm font-semibold text-neutral-800">
           {provider.name}
         </span>
-        <span className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-xs text-emerald-600">
-          <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden />
-          已生效
+        <span className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-xs text-neutral-500">
+          <span className="h-2 w-2 rounded-full bg-neutral-300" aria-hidden />
+          已加载
         </span>
       </header>
       {provider.models.length > 0 && (
         <ul className="mt-3 flex flex-wrap gap-1.5">
-          {provider.models.map((model) => (
+          {provider.models.map((item) => (
             <li
-              key={model}
+              key={item}
               className="rounded-full border border-neutral-200 bg-neutral-50 px-2 py-0.5 font-mono text-xs text-neutral-600"
             >
-              {model}
+              {item}
             </li>
           ))}
         </ul>
       )}
+      {/* 测试连接：只测当前选中的模型，结果即时反馈 */}
+      <div className="mt-3 rounded border border-neutral-200 bg-neutral-50 p-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-neutral-500">测试连接</span>
+          {provider.models.length > 0 ? (
+            <select
+              value={model}
+              onChange={(event) => setModel(event.target.value)}
+              className="rounded border border-neutral-300 bg-white px-1.5 py-0.5 font-mono text-xs focus:border-neutral-500 focus:outline-none"
+            >
+              {provider.models.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              value={manualModel}
+              onChange={(event) => setManualModel(event.target.value)}
+              placeholder="模型名（如 gpt-4o-mini）"
+              className="w-48 rounded border border-neutral-300 bg-white px-1.5 py-0.5 font-mono text-xs focus:border-neutral-500 focus:outline-none"
+            />
+          )}
+          <button
+            type="button"
+            disabled={test.phase === 'testing'}
+            onClick={() => void handleTest()}
+            className="shrink-0 rounded border border-neutral-300 bg-white px-2 py-0.5 text-xs text-neutral-700 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {test.phase === 'testing' ? '测试中…' : '测试连接'}
+          </button>
+          {test.phase === 'testing' && (
+            <span className="inline-flex items-center gap-1.5 text-xs text-neutral-500">
+              <span
+                className="h-2.5 w-2.5 animate-spin rounded-full border border-neutral-300 border-t-neutral-600"
+                aria-hidden
+              />
+              正在请求模型端点…
+            </span>
+          )}
+          {test.phase === 'ok' && (
+            <span className="inline-flex items-center gap-1.5 text-xs text-emerald-600">
+              <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden />
+              连接正常{test.latencyMs != null ? ` · ${test.latencyMs}ms` : ''}
+            </span>
+          )}
+          {test.phase === 'fail' && (
+            <span
+              className="inline-flex min-w-0 items-center gap-1.5 text-xs text-red-600"
+              title={test.message}
+            >
+              <span className="h-2 w-2 shrink-0 rounded-full bg-red-500" aria-hidden />
+              <span className="min-w-0 truncate">{test.message}</span>
+            </span>
+          )}
+        </div>
+      </div>
     </article>
   );
 }

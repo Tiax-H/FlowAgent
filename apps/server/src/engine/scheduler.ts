@@ -25,17 +25,13 @@ import type {
 } from '@flowagent/shared';
 import { validateWorkflowDefinition } from '@flowagent/shared';
 
-import { LlmAdapter } from '../llm/llm.adapter';
+import { extractLlmErrorFields, LlmAdapter } from '../llm/llm.adapter';
 import { McpRegistryService } from '../mcp/mcp.registry';
 import { PrismaService } from '../prisma/prisma.service';
 import { RunsService } from '../runs/runs.service';
 import { EventStore } from './event-store.service';
 import { evaluateCondition } from './expression';
-import {
-  isTerminalRunStatus,
-  projectRunState,
-  type ProjectedRunState,
-} from './projection';
+import { isTerminalRunStatus, projectRunState, type ProjectedRunState } from './projection';
 import { createAgentExecutor } from './executors/agent.executor';
 import { createHumanExecutor, createLoopExecutor } from './executors/human-loop.executors';
 import { createLlmExecutor, createToolExecutor } from './executors/llm-tool.executors';
@@ -45,10 +41,7 @@ import { truncateForEvent } from './payload';
 import { type TemplateContext } from './template';
 
 /** 事件发射器：经 EventStore 的 per-run 串行队列原子分配 seq 并落库，返回实际事件序号 */
-type EmitFn = (
-  type: WorkflowEventType,
-  payload: Record<string, unknown>,
-) => Promise<number>;
+type EmitFn = (type: WorkflowEventType, payload: Record<string, unknown>) => Promise<number>;
 
 function createExecutorFactory(services: NodeRuntimeServices) {
   const agent = createAgentExecutor(services);
@@ -446,6 +439,18 @@ export class EngineService {
     });
   }
 
+  /**
+   * 查询控制面意图：暂停/取消「已请求但尚未生效」时对应字段为 true。
+   * 供 run summary/详情 DTO 暴露给前端轮询展示「等待生效」反馈；
+   * 进程内内存态，进程重启后丢失（可接受）。
+   */
+  getControlIntent(runId: string): { pauseRequested: boolean; cancelRequested: boolean } {
+    return {
+      pauseRequested: this.pauseRequested.has(runId),
+      cancelRequested: this.cancelRequested.has(runId),
+    };
+  }
+
   /** 恢复：suspended（主动暂停 / 崩溃）→ 追加 RUN_RESUMED 后重入调度 */
   async resume(runId: string): Promise<void> {
     await this.withControlLock(runId, async () => {
@@ -633,6 +638,17 @@ export class EngineService {
     let aborted = false;
     let humanSuspended = false;
     let pauseSeen = false;
+    /** 首个失败节点现场：run 级终态延迟到收尾统一落库时取其错误信息。
+     *  用对象持有（节点闭包内赋值、收尾读取），避免 TS 把捕获变量收窄成 null */
+    const failureRef: {
+      current: {
+        nodeId: string;
+        message: string;
+        errorCategory?: string;
+        errorHint?: string;
+        upstreamExcerpt?: string;
+      } | null;
+    } = { current: null };
 
     const stopDispatching = (): boolean =>
       aborted ||
@@ -707,13 +723,23 @@ export class EngineService {
       } catch (error) {
         aborted = true;
         const message = error instanceof Error ? error.message : String(error);
+        const llmFields = extractLlmErrorFields(error);
+        if (failureRef.current === null) failureRef.current = { nodeId, message, ...llmFields };
         try {
-          const failSeq = await emit('NODE_FAILED', { nodeId, nodeType: node.type, error: message });
+          const failSeq = await emit('NODE_FAILED', {
+            nodeId,
+            nodeType: node.type,
+            error: message,
+            ...llmFields,
+          });
           await emit('CHECKPOINT_SAVED', { seq: failSeq });
-        } finally {
-          // terminate 幂等（终态屏障）：并行多节点同时失败也只落一条 RUN_FAILED
-          await this.terminate(runId, 'RUN_FAILED', { error: `节点 ${nodeId} 失败: ${message}` });
+        } catch (emitError) {
+          // NODE_FAILED 落库失败：记录现场，由收尾的 terminate / 调度器兜底路径落终态
+          this.logger.error(`run ${runId} 节点 ${nodeId} 失败事件落库失败: ${String(emitError)}`);
         }
+        // 注意：run 级 RUN_FAILED 不在此处落库——并行场景下其他 in-flight 节点
+        // 还会照常结算，终态必须等收尾（所有 in-flight settle 后）统一落库，
+        // 否则 SSE 收到终态即关流，事件流里会出现「终态之后的事件」
       }
     };
 
@@ -759,7 +785,24 @@ export class EngineService {
       await this.terminate(runId, 'RUN_SUSPENDED', { reason: 'paused' });
       return;
     }
-    if (aborted) return; // RUN_FAILED 已发
+    if (aborted) {
+      // 终态延迟落库：此处所有 in-flight 节点已 settle（上方 allSettled），
+      // 慢节点的结算事件（NODE_SUCCEEDED/CHECKPOINT_SAVED 等）已先于 RUN_FAILED 落库，
+      // 事件流里不会出现「终态之后的事件」。terminate 幂等（终态屏障）：
+      // 并行多节点同时失败也只落一条 RUN_FAILED。
+      const failure = failureRef.current;
+      await this.terminate(runId, 'RUN_FAILED', {
+        error: failure ? `节点 ${failure.nodeId} 失败: ${failure.message}` : '运行失败',
+        ...(failure
+          ? {
+              errorCategory: failure.errorCategory,
+              errorHint: failure.errorHint,
+              upstreamExcerpt: failure.upstreamExcerpt,
+            }
+          : {}),
+      });
+      return;
+    }
     if (humanSuspended) {
       await this.runsService.syncFromProjection(runId);
       return;

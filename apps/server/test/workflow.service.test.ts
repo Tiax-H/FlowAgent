@@ -195,6 +195,49 @@ describe('WorkflowService', () => {
     expect(first.name).toBe('first');
   });
 
+  it('findAll 列表不返回 definition（列表页只用元信息，详情接口保留）', async () => {
+    await service.create({ name: 'demo', definition: validDefinition() });
+    const list = await service.findAll();
+    expect(list).toHaveLength(1);
+    expect(Object.keys(list[0]!)).not.toContain('definition');
+  });
+
+  it('findAll search 按 name contains 过滤且大小写不敏感（容忍首尾空白）', async () => {
+    const alpha = await service.create({ name: 'Alpha Pipeline', definition: validDefinition() });
+    await service.create({ name: 'beta flow', definition: validDefinition() });
+
+    const lower = await service.findAll('alpha');
+    expect(lower.map((item) => item.id)).toEqual([alpha.id]);
+    const upper = await service.findAll('  ALPHA ');
+    expect(upper.map((item) => item.id)).toEqual([alpha.id]);
+    expect(await service.findAll('不存在的关键字')).toHaveLength(0);
+  });
+
+  it('name 超过 100 个字符 → create/update 均抛 422 中文错误', async () => {
+    const longName = '名'.repeat(101);
+    try {
+      await service.create({ name: longName, definition: validDefinition() });
+      expect.unreachable('应当抛出 UnprocessableEntityException');
+    } catch (error) {
+      expect(error).toBeInstanceOf(UnprocessableEntityException);
+      expect((error as UnprocessableEntityException).message).toContain(
+        '工作流名称不能超过 100 个字符',
+      );
+    }
+    const created = await service.create({ name: 'demo', definition: validDefinition() });
+    await expect(service.update(created.id, { name: longName })).rejects.toBeInstanceOf(
+      UnprocessableEntityException,
+    );
+    const row = model.findUnique({ where: { id: created.id } });
+    expect(row?.name).toBe('demo');
+  });
+
+  it('name 恰好 100 个字符可创建', async () => {
+    const name = '名'.repeat(100);
+    const created = await service.create({ name, definition: validDefinition() });
+    expect(created.name).toBe(name);
+  });
+
   it('findOne 不存在抛 NotFound', async () => {
     await expect(service.findOne('missing')).rejects.toBeInstanceOf(NotFoundException);
   });

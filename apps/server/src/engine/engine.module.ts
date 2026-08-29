@@ -20,5 +20,7 @@ export class EngineModule implements OnModuleInit {
 
   onModuleInit(): void {
     this.runsService.setRunStarter((runId) => this.engine.execute(runId));
+    // 控制面意图（暂停/取消已请求未生效）暴露给 run summary/详情 DTO
+    this.runsService.setControlIntentProvider((runId) => this.engine.getControlIntent(runId));
   }
 }

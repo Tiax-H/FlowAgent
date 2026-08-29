@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useReactFlow, type Node } from '@xyflow/react';
 import type {
   AgentNodeData,
@@ -648,12 +648,44 @@ function ToolForm({
   );
 }
 
+/** Provider 列表加载失败警示条：不静默降级，保留手输兜底并提供重试 */
+function ProvidersWarning({
+  error,
+  retrying,
+  onRetry,
+}: {
+  error: string | null;
+  retrying: boolean;
+  onRetry: () => void;
+}) {
+  if (!error) return null;
+  return (
+    <div className="flex items-center gap-2 rounded border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
+      <span className="min-w-0 flex-1">
+        无法加载可用模型列表，可手动填写
+        <span className="ml-1 text-amber-600/80">（{error}）</span>
+      </span>
+      <button
+        type="button"
+        onClick={onRetry}
+        disabled={retrying}
+        className="shrink-0 rounded border border-amber-400 bg-white px-1.5 py-0.5 text-amber-700 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {retrying ? '重试中…' : '重试'}
+      </button>
+    </div>
+  );
+}
+
 function AgentForm({
   data,
   onChange,
   tools,
   toolsError,
   providers,
+  providersError,
+  providersLoading,
+  onRetryProviders,
   peers,
 }: {
   data: AgentNodeData;
@@ -661,11 +693,15 @@ function AgentForm({
   tools: McpTool[];
   toolsError: string | null;
   providers: ProviderInfo[];
+  providersError: string | null;
+  providersLoading: boolean;
+  onRetryProviders: () => void;
   peers: PeerNode[];
 }) {
   const bound: McpToolBinding[] = data.tools ?? [];
   return (
     <div className="space-y-3">
+      <ProvidersWarning error={providersError} retrying={providersLoading} onRetry={onRetryProviders} />
       <Field label="Provider" hint="LLM 服务方，来自系统 Provider 配置">
         <ProviderPicker
           value={data.provider ?? ''}
@@ -747,15 +783,22 @@ function LlmForm({
   data,
   onChange,
   providers,
+  providersError,
+  providersLoading,
+  onRetryProviders,
   peers,
 }: {
   data: LlmNodeData;
   onChange: (patch: Partial<LlmNodeData>) => void;
   providers: ProviderInfo[];
+  providersError: string | null;
+  providersLoading: boolean;
+  onRetryProviders: () => void;
   peers: PeerNode[];
 }) {
   return (
     <div className="space-y-3">
+      <ProvidersWarning error={providersError} retrying={providersLoading} onRetry={onRetryProviders} />
       <Field label="Provider" hint="LLM 服务方，来自系统 Provider 配置">
         <ProviderPicker
           value={data.provider ?? ''}
@@ -884,6 +927,8 @@ export function PropertyPanel({ node, onChange, onDelete, peerNodes }: PropertyP
   const [tools, setTools] = useState<McpTool[]>([]);
   const [toolsError, setToolsError] = useState<string | null>(null);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [providersError, setProvidersError] = useState<string | null>(null);
+  const [providersLoading, setProvidersLoading] = useState(false);
 
   useEffect(() => {
     if (data.nodeType === 'agent' || data.nodeType === 'tool') {
@@ -899,21 +944,26 @@ export function PropertyPanel({ node, onChange, onDelete, peerNodes }: PropertyP
     }
   }, [data.nodeType]);
 
-  useEffect(() => {
-    // Provider 列表加载失败时静默降级为空数组（各字段退化为手输）
-    let cancelled = false;
+  /** 加载 Provider 列表；失败时在面板警示（保留手输兜底），可重试 */
+  const loadProviders = useCallback(() => {
+    setProvidersLoading(true);
+    setProvidersError(null);
     void providersApi
       .list()
       .then((result) => {
-        if (!cancelled) setProviders(result.providers ?? []);
+        setProviders(result.providers ?? []);
+        setProvidersError(null);
       })
-      .catch(() => {
-        if (!cancelled) setProviders([]);
-      });
-    return () => {
-      cancelled = true;
-    };
+      .catch((cause: unknown) => {
+        setProviders([]);
+        setProvidersError(cause instanceof Error ? cause.message : String(cause));
+      })
+      .finally(() => setProvidersLoading(false));
   }, []);
+
+  useEffect(() => {
+    loadProviders();
+  }, [loadProviders]);
 
   let flowPeers: PeerNode[] = [];
   try {
@@ -983,6 +1033,9 @@ export function PropertyPanel({ node, onChange, onDelete, peerNodes }: PropertyP
             tools={tools}
             toolsError={toolsError}
             providers={providers}
+            providersError={providersError}
+            providersLoading={providersLoading}
+            onRetryProviders={loadProviders}
             peers={peers}
           />
         )}
@@ -993,6 +1046,9 @@ export function PropertyPanel({ node, onChange, onDelete, peerNodes }: PropertyP
             data={data as unknown as LlmNodeData}
             onChange={(patch) => onChange(patch as Record<string, unknown>)}
             providers={providers}
+            providersError={providersError}
+            providersLoading={providersLoading}
+            onRetryProviders={loadProviders}
             peers={peers}
           />
         )}

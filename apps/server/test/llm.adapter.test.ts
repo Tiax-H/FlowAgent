@@ -1,6 +1,35 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { LlmAdapter, LlmProviderError, parseProviderConfigs } from '../src/llm/llm.adapter';
+import {
+  classifyUpstreamStatus,
+  extractLlmErrorFields,
+  LlmAdapter,
+  LlmProviderError,
+  parseProviderConfigs,
+} from '../src/llm/llm.adapter';
+
+/** 最小 fetch 响应桩：adapter 只消费 ok/status/text()/json() */
+interface FakeFetchResponse {
+  ok: boolean;
+  status: number;
+  text: () => Promise<string>;
+  json: () => Promise<unknown>;
+}
+
+function fakeResponse(status: number, body: string): FakeFetchResponse {
+  return {
+    ok: status < 400,
+    status,
+    text: async () => body,
+    json: async () => JSON.parse(body) as unknown,
+  };
+}
+
+const PROVIDER_ENV = {
+  FLOWAGENT_PROVIDERS_TEST__BASEURL: 'https://upstream.example.com/v1',
+  FLOWAGENT_PROVIDERS_TEST__APIKEY: 'sk-secret-key',
+  FLOWAGENT_PROVIDERS_TEST__MODELS: 'm-1',
+};
 
 describe('parseProviderConfigs', () => {
   it('解析完整 Provider（baseURL/apiKey/models）', () => {
@@ -47,6 +76,191 @@ describe('LlmAdapter（无网络路径）', () => {
     await expect(adapter.chatCompletion('missing', 'm', { messages: [] })).rejects.toBeInstanceOf(
       LlmProviderError,
     );
+  });
+});
+
+describe('classifyUpstreamStatus', () => {
+  it('404 → model_not_found；401/403 → auth；429 → rate_limited；5xx → upstream_error', () => {
+    expect(classifyUpstreamStatus(404).category).toBe('model_not_found');
+    expect(classifyUpstreamStatus(401).category).toBe('auth');
+    expect(classifyUpstreamStatus(403).category).toBe('auth');
+    expect(classifyUpstreamStatus(429).category).toBe('rate_limited');
+    expect(classifyUpstreamStatus(500).category).toBe('upstream_error');
+    expect(classifyUpstreamStatus(503).category).toBe('upstream_error');
+    expect(classifyUpstreamStatus(400).category).toBe('invalid_request');
+  });
+
+  it('每个归类都携带中文 hint', () => {
+    expect(classifyUpstreamStatus(404).hint).toBe('模型不存在或已下线');
+    expect(classifyUpstreamStatus(401).hint).toBe('密钥无效或额度不足');
+    expect(classifyUpstreamStatus(429).hint).toBe('上游限流，请稍后重试');
+    expect(classifyUpstreamStatus(500).hint).toBe('上游服务错误');
+  });
+});
+
+describe('LlmAdapter 错误归类（mock 上游响应）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function captureError(status: number, body: string): Promise<LlmProviderError> {
+    vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(status, body)));
+    const adapter = LlmAdapter.fromEnv(PROVIDER_ENV);
+    try {
+      await adapter.chatCompletion('test', 'm-1', { messages: [] });
+      throw new Error('应当抛出 LlmProviderError');
+    } catch (error) {
+      return error as LlmProviderError;
+    }
+  }
+
+  it('404 归类为 model_not_found，error 消息为中文摘要、不含上游原文', async () => {
+    const error = await captureError(
+      404,
+      'Thank you for participating in the Stealth Ox Alpha testing period. user_id=9527 billing=https://pay.stealth-ox.example/9527',
+    );
+    expect(error.classification.category).toBe('model_not_found');
+    expect(error.classification.hint).toBe('模型不存在或已下线');
+    expect(error.message).toBe('模型不存在或已下线（上游 404）');
+    expect(error.statusCode).toBe(404);
+    expect(error.message).not.toContain('Stealth Ox');
+    expect(error.message).not.toContain('user_id');
+    expect(error.message).not.toContain('sk-secret-key');
+  });
+
+  it('401/403 归类为 auth（密钥无效或额度不足），message 不含上游 "Insufficient balance" 原文', async () => {
+    const error = await captureError(401, '{"error":{"message":"Insufficient balance"}}');
+    expect(error.classification.category).toBe('auth');
+    expect(error.message).toBe('密钥无效或额度不足（上游 401）');
+    expect(error.message).not.toContain('Insufficient');
+  });
+
+  it('429 归类为 rate_limited', async () => {
+    const error = await captureError(429, 'rate limited');
+    expect(error.classification.category).toBe('rate_limited');
+    expect(error.classification.hint).toBe('上游限流，请稍后重试');
+  });
+
+  it('5xx 归类为 upstream_error；其余 4xx 归类为 invalid_request', async () => {
+    const serverError = await captureError(502, 'bad gateway');
+    expect(serverError.classification.category).toBe('upstream_error');
+    expect(serverError.message).toBe('上游服务错误（上游 502）');
+
+    const clientError = await captureError(422, 'unprocessable');
+    expect(clientError.classification.category).toBe('invalid_request');
+  });
+
+  it('upstreamExcerpt 截断至 200 字符以内，保留用于诊断', async () => {
+    const error = await captureError(404, 'x'.repeat(1000));
+    expect(error.classification.upstreamExcerpt).toHaveLength(200);
+  });
+
+  it('upstreamExcerpt 抹去可能被上游回显的 apiKey', async () => {
+    const error = await captureError(401, 'invalid key: sk-secret-key (account 9527)');
+    expect(error.classification.upstreamExcerpt).not.toContain('sk-secret-key');
+    expect(error.classification.upstreamExcerpt).toContain('***');
+  });
+
+  it('超时归类为 timeout，message 含超时时长', async () => {
+    const fetchMock = vi.fn(
+      (_url: unknown, init?: { signal?: AbortSignal }) =>
+        new Promise<FakeFetchResponse>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            const abortError = new Error('The operation was aborted');
+            abortError.name = 'AbortError';
+            reject(abortError);
+          });
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const adapter = LlmAdapter.fromEnv(PROVIDER_ENV);
+    const error = (await adapter
+      .chatCompletion('test', 'm-1', { messages: [], timeoutMs: 20 })
+      .catch((e: unknown) => e)) as LlmProviderError;
+    expect(error).toBeInstanceOf(LlmProviderError);
+    expect(error.classification.category).toBe('timeout');
+    expect(error.classification.hint).toBe('请求超时');
+    expect(error.message).toContain('请求超时');
+    expect(error.message).not.toContain('sk-secret-key');
+  });
+
+  it('网络错误归类为 network，message 不含底层异常细节', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('fetch failed: dns lookup stealth-ox.internal failed');
+      }),
+    );
+    const adapter = LlmAdapter.fromEnv(PROVIDER_ENV);
+    const error = (await adapter
+      .chatCompletion('test', 'm-1', { messages: [] })
+      .catch((e: unknown) => e)) as LlmProviderError;
+    expect(error).toBeInstanceOf(LlmProviderError);
+    expect(error.classification.category).toBe('network');
+    expect(error.message).toBe('无法连接上游服务');
+    expect(error.message).not.toContain('dns');
+  });
+
+  it('错误对象经 extractLlmErrorFields 提取为事件 payload 扩展字段', async () => {
+    const error = await captureError(404, 'stealth-ox model retired');
+    const fields = extractLlmErrorFields(error);
+    expect(fields).toEqual({
+      errorCategory: 'model_not_found',
+      errorHint: '模型不存在或已下线',
+      upstreamExcerpt: 'stealth-ox model retired',
+    });
+    expect(extractLlmErrorFields(new Error('普通错误'))).toEqual({});
+  });
+});
+
+describe('LlmAdapter.testProvider（连通性测试）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('上游 200 → { ok: true, latencyMs }，请求携带 max_tokens=1', async () => {
+    const fetchMock = vi.fn(async () =>
+      fakeResponse(200, '{"choices":[{"message":{"content":"pong"}}]}'),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const adapter = LlmAdapter.fromEnv(PROVIDER_ENV);
+    const outcome = await adapter.testProvider('test', 'm-1');
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.latencyMs).toBeTypeOf('number');
+      expect(outcome.latencyMs).toBeGreaterThanOrEqual(0);
+    }
+
+    const calls = fetchMock.mock.calls as unknown as Array<
+      [url: unknown, init?: { body?: string }]
+    >;
+    const init = calls[0]?.[1];
+    const requestBody = JSON.parse(init?.body ?? '{}') as { max_tokens?: number };
+    expect(requestBody.max_tokens).toBe(1);
+  });
+
+  it('上游 404 → { ok: false, message }（中文，绝不变 500 / 不抛出）', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => fakeResponse(404, 'stealth-ox upstream raw body')),
+    );
+    const adapter = LlmAdapter.fromEnv(PROVIDER_ENV);
+    const outcome = await adapter.testProvider('test', 'ghost-model');
+    expect(outcome).toEqual({ ok: false, message: '模型不存在或已下线（上游 404）' });
+  });
+
+  it('上游 401 → { ok: false, message: 密钥无效或额度不足 }', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(401, 'Insufficient balance')));
+    const adapter = LlmAdapter.fromEnv(PROVIDER_ENV);
+    const outcome = await adapter.testProvider('test', 'm-1');
+    expect(outcome).toEqual({ ok: false, message: '密钥无效或额度不足（上游 401）' });
+  });
+
+  it('chatCompletion 意外异常也被兜底为 ok:false，不向上抛', async () => {
+    const adapter = LlmAdapter.fromEnv(PROVIDER_ENV);
+    vi.spyOn(adapter, 'chatCompletion').mockRejectedValue(new Error('boom'));
+    const outcome = await adapter.testProvider('test', 'm-1');
+    expect(outcome).toEqual({ ok: false, message: '测试请求失败，请稍后重试' });
   });
 });
 

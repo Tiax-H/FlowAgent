@@ -1,4 +1,5 @@
 import {
+  BadGatewayException,
   BadRequestException,
   ConflictException,
   NotFoundException,
@@ -9,7 +10,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PrismaService } from '../src/prisma/prisma.service';
 import { McpConnector } from '../src/mcp/mcp.connector';
-import { McpRegistryService } from '../src/mcp/mcp.registry';
+import { McpRegistryService, McpToolCallError } from '../src/mcp/mcp.registry';
 import { McpService } from '../src/mcp/mcp.service';
 
 type ServerRow = {
@@ -87,6 +88,11 @@ function makePrismaStub(servers: ServerRow[], tools: ToolRow[]) {
       findMany: vi.fn(async () =>
         tools.map((tool) => ({ ...tool, server: servers.find((s) => s.id === tool.serverId)! })),
       ),
+      findFirst: vi.fn(
+        async ({ where }: { where: { serverId: string; name: string } }) =>
+          tools.find((tool) => tool.serverId === where.serverId && tool.name === where.name) ??
+          null,
+      ),
       deleteMany: vi.fn(async ({ where }: { where: { serverId: string } }) => {
         const before = tools.length;
         for (let i = tools.length - 1; i >= 0; i -= 1) {
@@ -121,6 +127,7 @@ function makeRegistryStub() {
     disconnectServer: vi.fn(async () => undefined),
     callTool: vi.fn(async () => ({ ok: true, result: 'ok' })),
     resumeEnabledServers: vi.fn(async () => undefined),
+    isServerConnected: vi.fn(() => true),
   } as unknown as McpRegistryService;
 }
 
@@ -223,7 +230,108 @@ describe('McpService', () => {
     expect(list[0]?.inputSchema).toEqual({ type: 'object' });
   });
 
+  describe('invokeTool 错误语义（不许裸 500）', () => {
+    function seedConnectedServer(): void {
+      servers.push(makeRow({ id: 'srv_search', name: 'search', status: 'connected' }));
+      tools.push({
+        id: 't1',
+        serverId: 'srv_search',
+        name: 'web_search',
+        title: null,
+        description: null,
+        inputSchema: '{"type":"object"}',
+        discoveredAt: new Date(),
+      });
+    }
+
+    it('未知 server → 404 中文错误', async () => {
+      await expect(service.invokeTool('nope', 'any_tool', {})).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      await expect(service.invokeTool('nope', 'any_tool', {})).rejects.toThrow(
+        'Server “nope” 不存在或未连接',
+      );
+    });
+
+    it('已知 server 但未连接 → 502 中文错误', async () => {
+      servers.push(makeRow({ id: 'srv_search', name: 'search', status: 'error' }));
+      (registry.isServerConnected as ReturnType<typeof vi.fn>).mockReturnValue(false);
+      await expect(service.invokeTool('search', 'web_search', {})).rejects.toBeInstanceOf(
+        BadGatewayException,
+      );
+      await expect(service.invokeTool('search', 'web_search', {})).rejects.toThrow('未连接');
+    });
+
+    it('已知 server 但未知 tool → 404 中文错误', async () => {
+      seedConnectedServer();
+      await expect(service.invokeTool('search', 'ghost_tool', {})).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      await expect(service.invokeTool('search', 'ghost_tool', {})).rejects.toThrow(
+        'Server “search” 上不存在工具 “ghost_tool”',
+      );
+    });
+
+    it('registry 抛 server_not_found → 404；not_connected/call_failed → 502', async () => {
+      seedConnectedServer();
+      (registry.callTool as ReturnType<typeof vi.fn>).mockImplementation(
+        async (_server: string, tool: string) => {
+          throw new McpToolCallError(`boom ${tool}`, 'server_not_found');
+        },
+      );
+      await expect(service.invokeTool('search', 'web_search', {})).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+
+      (registry.callTool as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        throw new McpToolCallError('Server “search” 未连接', 'server_not_connected');
+      });
+      await expect(service.invokeTool('search', 'web_search', {})).rejects.toBeInstanceOf(
+        BadGatewayException,
+      );
+
+      (registry.callTool as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        throw new McpToolCallError('工具 “web_search” 调用失败: upstream broke', 'call_failed');
+      });
+      await expect(service.invokeTool('search', 'web_search', {})).rejects.toBeInstanceOf(
+        BadGatewayException,
+      );
+    });
+
+    it('registry 抛非类型化异常 → 502 带中文说明', async () => {
+      seedConnectedServer();
+      (registry.callTool as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        throw new Error('socket hang up');
+      });
+      await expect(service.invokeTool('search', 'web_search', {})).rejects.toBeInstanceOf(
+        BadGatewayException,
+      );
+      await expect(service.invokeTool('search', 'web_search', {})).rejects.toThrow(
+        'MCP 工具调用失败: socket hang up',
+      );
+    });
+
+    it('server/tool 缺失或空串 → 400', async () => {
+      await expect(service.invokeTool('', 'web_search', {})).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      await expect(service.invokeTool('search', '', {})).rejects.toThrow(
+        'server 与 tool 必须为非空字符串',
+      );
+    });
+  });
+
   it('invokeTool 走 registry 路由', async () => {
+    servers.push(makeRow({ id: 'srv_search', name: 'search', status: 'connected' }));
+    tools.push({
+      id: 't1',
+      serverId: 'srv_search',
+      name: 'web_search',
+      title: '网页搜索',
+      description: null,
+      inputSchema: '{"type":"object"}',
+      discoveredAt: new Date(),
+    });
     await service.invokeTool('search', 'web_search', { query: 'mcp' });
     expect(registry.callTool).toHaveBeenCalledWith('search', 'web_search', { query: 'mcp' });
   });

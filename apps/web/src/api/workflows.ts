@@ -34,7 +34,11 @@ export interface CreateWorkflowInput {
 }
 
 export const workflowsApi = {
-  list: () => request<WorkflowRecord[]>('/api/workflows'),
+  /** search 传参时按名称关键字过滤；老后端不识别该参数时返回全量，由调用方前端过滤兜底 */
+  list: (search?: string) =>
+    request<WorkflowRecord[]>(
+      search ? `/api/workflows?search=${encodeURIComponent(search)}` : '/api/workflows',
+    ),
   get: (id: string) => request<WorkflowRecord>(`/api/workflows/${id}`),
   create: (body: CreateWorkflowInput) =>
     request<WorkflowRecord>('/api/workflows', { method: 'POST', body: JSON.stringify(body) }),

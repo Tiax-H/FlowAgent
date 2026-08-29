@@ -20,11 +20,24 @@ export class RunStreamController {
     private readonly eventStore: EventStore,
   ) {}
 
+  /**
+   * 不存在/已删除的 run 直接 404（中文 message），避免挂起一条 0 事件的连接。
+   * Nest 11 会先等待异步 @Sse 处理器再订阅流，拒绝发生在 SSE 头提交之前，
+   * NotFoundException 交由异常过滤器返回 JSON 错误响应。
+   */
   @Sse('runs/:id/stream')
-  stream(@Param('id') id: string, @Req() request: Request): Observable<MessageEvent> {
+  async stream(
+    @Param('id') id: string,
+    @Req() request: Request,
+  ): Promise<Observable<MessageEvent>> {
+    await this.runsService.ensureRun(id);
     const lastEventIdHeader = Number(request.headers['last-event-id'] ?? 0);
-    const fromSeq = Number.isFinite(lastEventIdHeader) && lastEventIdHeader > 0 ? lastEventIdHeader : 0;
+    const fromSeq =
+      Number.isFinite(lastEventIdHeader) && lastEventIdHeader > 0 ? lastEventIdHeader : 0;
+    return this.buildStream(id, fromSeq);
+  }
 
+  private buildStream(id: string, fromSeq: number): Observable<MessageEvent> {
     return new Observable<MessageEvent>((observer: Observer<MessageEvent>) => {
       let lastSeq = fromSeq;
       let closed = false;
@@ -37,7 +50,11 @@ export class RunStreamController {
       const push = (event: WorkflowEvent): void => {
         if (closed) return;
         // id 字段让浏览器在重连时自动携带 Last-Event-ID
-        observer.next({ id: String(event.seq), data: event, type: 'event' } as unknown as MessageEvent);
+        observer.next({
+          id: String(event.seq),
+          data: event,
+          type: 'event',
+        } as unknown as MessageEvent);
       };
 
       const finishIfTerminal = (event: WorkflowEvent): boolean => {
@@ -98,7 +115,8 @@ export class RunStreamController {
 
           // 4. 心跳注释帧：防止代理/负载均衡器掐断空闲连接
           heartbeat = setInterval(() => {
-            if (!closed) observer.next({ data: { heartbeat: true }, type: 'heartbeat' } as MessageEvent);
+            if (!closed)
+              observer.next({ data: { heartbeat: true }, type: 'heartbeat' } as MessageEvent);
           }, HEARTBEAT_MS);
         } catch (error) {
           cleanup();

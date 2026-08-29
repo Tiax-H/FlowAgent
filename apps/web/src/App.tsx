@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { mcpApi } from './api/mcp';
 import { providersApi } from './api/providers';
@@ -52,6 +52,31 @@ function go(path: string): void {
   window.location.hash = path;
 }
 
+/** Route → hash 串（路由被守卫取消时回滚地址栏用） */
+function routeToHash(route: Route): string {
+  switch (route.kind) {
+    case 'mcp':
+      return '#/mcp';
+    case 'settings':
+      return '#/settings';
+    case 'runs':
+      return '#/runs';
+    case 'editor':
+      return route.workflowId ? `#/editor/${route.workflowId}` : '#/editor';
+    case 'run':
+      return `#/runs/${route.id}`;
+    default:
+      return '#/workflows';
+  }
+}
+
+function routesEqual(a: Route, b: Route): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === 'editor' && b.kind === 'editor') return a.workflowId === b.workflowId;
+  if (a.kind === 'run' && b.kind === 'run') return a.id === b.id;
+  return true;
+}
+
 /** 从 start 节点 inputSchema 提取表单字段；无 schema 时回退到模板引用分析 */
 function extractInputFields(definition: WorkflowDefinition): InputField[] {
   const start = definition.nodes.find((node) => node.type === 'start');
@@ -91,8 +116,33 @@ function extractInputFields(definition: WorkflowDefinition): InputField[] {
 
 export function App() {
   const [route, setRoute] = useState<Route>(() => parseHash(window.location.hash));
+  /** 编辑器 dirty 状态的镜像：hashchange 无法取消，守卫要在切路由前同步判断 */
+  const editorDirtyRef = useRef(false);
+  const handleEditorDirtyChange = useCallback((dirty: boolean) => {
+    editorDirtyRef.current = dirty;
+  }, []);
+
+  // 路由切换守卫：画布有未保存修改时先确认；取消则回滚地址栏。
+  // 顶部导航、编辑器「← 返回」、浏览器前进/后退统一走这一个入口，避免重复弹窗。
+  const routeRef = useRef(route);
   useEffect(() => {
-    const onHashChange = () => setRoute(parseHash(window.location.hash));
+    const onHashChange = () => {
+      const next = parseHash(window.location.hash);
+      const current = routeRef.current;
+      if (routesEqual(current, next)) return;
+      if (current.kind === 'editor' && editorDirtyRef.current) {
+        if (!window.confirm('画布有未保存修改，确定离开？')) {
+          window.location.hash = routeToHash(current);
+          return;
+        }
+      }
+      if (next.kind !== 'editor') {
+        // 离开编辑器：重置 dirty 镜像（编辑器组件随即卸载）
+        editorDirtyRef.current = false;
+      }
+      routeRef.current = next;
+      setRoute(next);
+    };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
@@ -100,7 +150,48 @@ export function App() {
   const [workflows, setWorkflows] = useState<WorkflowRecord[]>([]);
   const [listLoading, setListLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /** 全局错误横幅是否展开显示全文（默认单行截断） */
+  const [errorExpanded, setErrorExpanded] = useState(false);
   const [creating, setCreating] = useState(false);
+  /** 工作流搜索：输入即时、查询防抖 300ms */
+  const [searchText, setSearchText] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+
+  useEffect(() => {
+    const timer = setTimeout(() => setSearchQuery(searchText.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [searchText]);
+
+  /** 前端按名称过滤（后端 ?search= 未上线时的兜底；后端已过滤时为幂等操作） */
+  const filterByName = useCallback((items: WorkflowRecord[], keyword: string) => {
+    const query = keyword.trim().toLowerCase();
+    if (!query) return items;
+    return items.filter((item) => item.name.toLowerCase().includes(query));
+  }, []);
+
+  const refresh = useCallback(async () => {
+    const keyword = searchQuery;
+    try {
+      setWorkflows(filterByName(await workflowsApi.list(keyword || undefined), keyword));
+      setError(null);
+    } catch (cause) {
+      if (keyword) {
+        // 老后端不识别 ?search= 时退化为全量拉取 + 前端过滤
+        try {
+          setWorkflows(filterByName(await workflowsApi.list(), keyword));
+          setError(null);
+          return;
+        } catch {
+          /* 走统一错误提示 */
+        }
+      }
+      setError(
+        cause instanceof TypeError ? '无法连接服务器，请确认 server 已启动' : String(cause),
+      );
+    } finally {
+      setListLoading(false);
+    }
+  }, [searchQuery, filterByName]);
 
   /** Provider/MCP 就绪状态：用于引导与运行前提醒 */
   const [providerCount, setProviderCount] = useState<number | null>(null);
@@ -108,19 +199,6 @@ export function App() {
 
   /** 待确认启动的运行（弹出输入对话框） */
   const [runPrompt, setRunPrompt] = useState<{ workflowId: string; name: string } | null>(null);
-
-  const refresh = useCallback(async () => {
-    try {
-      setWorkflows(await workflowsApi.list());
-      setError(null);
-    } catch (cause) {
-      setError(
-        cause instanceof TypeError ? '无法连接服务器，请确认 server 已启动' : String(cause),
-      );
-    } finally {
-      setListLoading(false);
-    }
-  }, []);
 
   useEffect(() => {
     if (route.kind === 'workflows') void refresh();
@@ -220,13 +298,29 @@ export function App() {
         </nav>
       </header>
 
-      {/* 全局错误横幅：任何页面的失败都可见 */}
+      {/* 全局错误横幅：任何页面的失败都可见；默认单行截断，可展开看全文 */}
       {error && (
-        <p className="flex items-center gap-2 bg-red-50 px-4 py-2 text-sm text-red-600">
-          <span className="min-w-0 flex-1 truncate">{error}</span>
+        <p className="flex items-start gap-2 bg-red-50 px-4 py-2 text-sm text-red-600">
+          <span
+            className={`min-w-0 flex-1 ${
+              errorExpanded ? 'break-all whitespace-pre-wrap' : 'truncate'
+            }`}
+          >
+            {error}
+          </span>
           <button
             type="button"
-            onClick={() => setError(null)}
+            onClick={() => setErrorExpanded((value) => !value)}
+            className="shrink-0 rounded px-1 text-xs text-red-500 hover:bg-red-100"
+          >
+            {errorExpanded ? '收起' : '展开'}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setError(null);
+              setErrorExpanded(false);
+            }}
             className="shrink-0 rounded px-1 text-xs text-red-400 hover:bg-red-100"
           >
             关闭
@@ -250,6 +344,7 @@ export function App() {
             workflowId={route.workflowId}
             onBack={() => go('/workflows')}
             onRun={(workflowId) => handleRun(workflowId)}
+            onDirtyChange={handleEditorDirtyChange}
           />
         </main>
       ) : route.kind === 'run' ? (
@@ -286,6 +381,16 @@ export function App() {
             <Button variant="primary" disabled={creating} onClick={() => void handleCreate()}>
               {creating ? '创建中…' : '+ 新建工作流'}
             </Button>
+          </div>
+
+          {/* 名称搜索：300ms 防抖，后端 ?search= 未上线时由前端过滤兜底 */}
+          <div className="mb-4">
+            <input
+              value={searchText}
+              onChange={(event) => setSearchText(event.target.value)}
+              placeholder="搜索工作流名称…"
+              className="w-full max-w-xs rounded border border-neutral-300 px-2 py-1.5 text-sm focus:border-neutral-500 focus:outline-none"
+            />
           </div>
 
           {/* 首次使用三步引导 */}
@@ -347,7 +452,9 @@ export function App() {
           {listLoading ? (
             <LoadingRows rows={3} />
           ) : workflows.length === 0 && !error ? (
-            <p className="text-sm text-neutral-400">暂无工作流</p>
+            <p className="text-sm text-neutral-400">
+              {searchQuery ? '没有匹配的工作流' : '暂无工作流'}
+            </p>
           ) : (
             <ul className="space-y-2">
               {workflows.map((workflow) => (
@@ -355,9 +462,9 @@ export function App() {
                   <button
                     type="button"
                     onClick={() => go(`/editor/${workflow.id}`)}
-                    className="group flex flex-1 items-center gap-3 rounded-lg border border-neutral-200 bg-white p-3 text-left transition-colors hover:border-neutral-400"
+                    className="group flex min-w-0 flex-1 items-center gap-3 rounded-lg border border-neutral-200 bg-white p-3 text-left transition-colors hover:border-neutral-400"
                   >
-                    <span className="text-sm font-medium group-hover:text-blue-700">
+                    <span className="min-w-0 truncate text-sm font-medium group-hover:text-blue-700">
                       {workflow.name}
                     </span>
                     <span className="text-xs text-neutral-400">v{workflow.version}</span>
@@ -462,11 +569,15 @@ function RunInputDialog({
     let input: unknown = null;
     if (mode === 'form') {
       input = Object.fromEntries(
-        fields.map((field) => {
+        fields.flatMap((field): Array<[string, unknown]> => {
           const raw = values[field.name]?.trim() ?? '';
-          if (field.kind === 'number') return [field.name, raw === '' ? null : Number(raw)];
-          if (field.kind === 'boolean') return [field.name, raw === 'true'];
-          return [field.name, raw === '' ? null : raw];
+          if (field.kind === 'boolean') {
+            // 三态：不传 = 省略字段，不产出 null/false 误导下游判断
+            if (raw === '') return [];
+            return [[field.name, raw === 'true']];
+          }
+          if (field.kind === 'number') return [[field.name, raw === '' ? null : Number(raw)]];
+          return [[field.name, raw === '' ? null : raw]];
         }),
       );
     } else {
@@ -555,6 +666,18 @@ function RunInputDialog({
                       }
                       className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 font-mono text-xs focus:border-neutral-500 focus:outline-none"
                     />
+                  ) : field.kind === 'boolean' ? (
+                    <select
+                      value={values[field.name] ?? ''}
+                      onChange={(event) =>
+                        setValues((previous) => ({ ...previous, [field.name]: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-xs focus:border-neutral-500 focus:outline-none"
+                    >
+                      <option value="">不传（保持未设置）</option>
+                      <option value="true">true</option>
+                      <option value="false">false</option>
+                    </select>
                   ) : (
                     <input
                       type={field.kind === 'number' ? 'number' : 'text'}

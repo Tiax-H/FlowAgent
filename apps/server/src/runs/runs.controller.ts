@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Post } from '@nestjs/common';
 
 import { RunsService } from './runs.service';
 
@@ -23,6 +23,17 @@ export class RunsController {
   @Get('runs/:id')
   async getRun(@Param('id') id: string): Promise<unknown> {
     return this.runsService.getRun(id);
+  }
+
+  /**
+   * 删除运行记录（软删）：204。
+   * 事件表 append-only（禁止 UPDATE/DELETE），仅给投影缓存行打 hiddenAt 标记；
+   * 已删 run 的列表/详情/事件/SSE 一律按 404 处理。
+   */
+  @Delete('runs/:id')
+  @HttpCode(204)
+  async deleteRun(@Param('id') id: string): Promise<void> {
+    await this.runsService.deleteRun(id);
   }
 
   /** 轻量状态端点（bridge 轮询用）：只读缓存列，零事件回放 */

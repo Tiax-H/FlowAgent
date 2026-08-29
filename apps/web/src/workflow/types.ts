@@ -32,12 +32,12 @@ export type {
   WorkflowEdge,
 };
 
-/** 后端 /api/workflows 返回结构 */
+/** 后端 /api/workflows 返回结构；列表接口可能不返回 definition（详情接口始终返回） */
 export interface WorkflowRecord {
   id: string;
   name: string;
   description: string | null;
-  definition: WorkflowDefinition | null;
+  definition?: WorkflowDefinition | null;
   version: number;
   createdAt: string;
   updatedAt: string;

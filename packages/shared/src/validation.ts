@@ -15,6 +15,13 @@ export interface WorkflowValidationResult {
   errors: string[];
 }
 
+/**
+ * 工作流资源名称（Workflow.name，即创建/更新接口的 name 字段）的长度上限。
+ * 注意区别于 WorkflowDefinition.name（definition 内部名，上限 200，见 schema.ts）。
+ * 前后端共用此常量，保证两端口径一致。
+ */
+export const WORKFLOW_NAME_MAX_LENGTH = 100;
+
 let cachedValidator: ValidateFunction | null = null;
 
 function getValidator(): ValidateFunction {
@@ -126,9 +133,7 @@ function validateLoopNode(node: MinimalNode, errors: string[]): void {
   if (typeof data.collection !== 'string' || (data.collection as string).trim().length === 0) {
     errors.push(`节点 "${node.id}"（loop）缺少 collection 迭代集合配置`);
   }
-  const subgraph = data.subgraph as
-    | { nodes?: MinimalNode[]; edges?: MinimalEdge[] }
-    | undefined;
+  const subgraph = data.subgraph as { nodes?: MinimalNode[]; edges?: MinimalEdge[] } | undefined;
   if (
     !subgraph ||
     typeof subgraph !== 'object' ||
@@ -178,7 +183,8 @@ export function validateWorkflowDefinition(input: unknown): WorkflowValidationRe
   };
 
   const nodes = definition.nodes;
-  const edges = definition.edges;  const nodeIds = nodes.map((node) => node.id);
+  const edges = definition.edges;
+  const nodeIds = nodes.map((node) => node.id);
   const seen = new Set<string>();
   for (const node of nodes) {
     if (seen.has(node.id)) errors.push(`节点 id 重复: "${node.id}"`);
