@@ -30,47 +30,45 @@ export function FlowAgentNode({ data, selected }: NodeProps<Node<FlowAgentNodeDa
 
   return (
     <div
-      className={`min-w-[140px] max-w-[220px] rounded-lg border-2 bg-white px-3 py-2 shadow-sm transition-shadow ${
-        selected ? 'border-neutral-900 shadow-md' : 'border-neutral-200'
+      className={`min-w-[160px] max-w-[220px] rounded-lg border bg-card px-3 py-2.5 shadow-xs transition-[border-color,box-shadow] ${
+        selected
+          ? 'border-brand-8 shadow-md ring-[3px] ring-brand-6/30'
+          : 'border-border hover:border-border-strong hover:shadow-sm'
       }`}
     >
-      {data.nodeType !== 'start' && (
-        <Handle type="target" position={Position.Left} className="!h-2.5 !w-2.5 !bg-neutral-400" />
-      )}
+      {data.nodeType !== 'start' && <Handle type="target" position={Position.Left} />}
       <div className="flex items-center gap-2">
-        <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${meta.color}`}>
+        <span className={`rounded px-1.5 py-0.5 text-2xs font-semibold ${meta.color}`}>
           {meta.label}
         </span>
         {toolCount > 0 && (
           <span
             title={`已绑定 ${toolCount} 个 MCP 工具`}
-            className="ml-auto shrink-0 rounded bg-amber-100 px-1 py-0.5 text-[10px] font-medium text-amber-700"
+            className="ml-auto shrink-0 rounded bg-amber-50 px-1 py-0.5 font-mono text-2xs text-amber-700"
           >
-            🔧 {toolCount}
+            {toolCount} 工具
           </span>
         )}
       </div>
-      <p className="mt-1 truncate text-sm font-medium text-neutral-800">
-        {data.name || meta.label}
-      </p>
+      <p className="mt-1.5 truncate text-sm font-medium">{data.name || meta.label}</p>
       {isModelNode &&
         (provider ? (
-          <p className="mt-0.5 truncate font-mono text-[10px] text-neutral-500" title={`${provider} / ${model}`}>
+          <p className="mt-0.5 truncate font-mono text-2xs text-faint" title={`${provider} / ${model}`}>
             {provider}
             {model ? ` / ${model}` : ''}
           </p>
         ) : (
-          <p className="mt-0.5 text-[10px] text-amber-600">未配置模型</p>
+          <p className="mt-0.5 text-2xs text-warning-11">未配置模型</p>
         ))}
       {data.nodeType === 'tool' && data.server && (
-        <p className="mt-0.5 truncate font-mono text-[10px] text-neutral-500">
+        <p className="mt-0.5 truncate font-mono text-2xs text-faint">
           {data.server}:{data.tool ?? ''}
         </p>
       )}
       {branches.length > 0 && (
         <ul className="mt-1 space-y-0.5">
           {branches.map((branch) => (
-            <li key={branch.id} className="flex items-center gap-1 text-[10px] text-neutral-500">
+            <li key={branch.id} className="flex items-center gap-1 text-2xs text-muted-foreground">
               <span className="font-mono">{branch.id}</span>
               <span className="truncate">{branch.label ?? branch.expression}</span>
             </li>
@@ -87,16 +85,11 @@ export function FlowAgentNode({ data, selected }: NodeProps<Node<FlowAgentNodeDa
               id={branch.id}
               type="source"
               position={Position.Right}
-              className="!h-2.5 !w-2.5 !bg-orange-400"
               style={{ top: `${((index + 1) / (branches.length + 1)) * 100}%` }}
             />
           ))
         ) : (
-          <Handle
-            type="source"
-            position={Position.Right}
-            className="!h-2.5 !w-2.5 !bg-neutral-400"
-          />
+          <Handle type="source" position={Position.Right} />
         ))}
     </div>
   );

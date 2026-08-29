@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { runsApi } from '../api/runs';
-import { formatDuration, shortenText } from '../lib/format';
+import { formatDuration, formatListTime, shortenText } from '../lib/format';
 import type { RunSummaryWithFlags } from '../types';
 import { Button, EmptyState, LoadingRows, RunStatusBadge } from '../components/ui';
 
@@ -107,18 +107,20 @@ export function RunsPage({
 
   return (
     <div className="mx-auto w-full max-w-3xl flex-1 overflow-auto p-6">
-      <h2 className="mb-4 text-sm font-medium text-neutral-600">运行历史</h2>
+      <div className="mb-6">
+        <h2 className="text-lg font-semibold">运行历史</h2>
+      </div>
       {error && (
-        <div className="mb-3 flex items-center gap-3 rounded bg-red-50 px-3 py-2 text-sm text-red-600">
+        <div className="mb-3 flex items-center gap-3 rounded-md border border-danger-6 bg-danger-2 px-3 py-2 text-sm text-danger-11">
           <span className="min-w-0 flex-1">{error}</span>
-          <Button variant="secondary" onClick={() => void refresh()}>
+          <Button variant="secondary" size="sm" onClick={() => void refresh()}>
             重试
           </Button>
         </div>
       )}
       {/* 状态筛选（前端过滤） */}
       <div className="mb-3 flex flex-wrap items-center gap-1 text-xs">
-        <span className="mr-1 text-neutral-400">状态：</span>
+        <span className="mr-1 text-faint">状态：</span>
         {STATUS_FILTERS.map((item) => {
           const count = runs.filter((run) => item.match(run.status)).length;
           const active = statusFilter === item.key;
@@ -127,10 +129,10 @@ export function RunsPage({
               key={item.key}
               type="button"
               onClick={() => setStatusFilter(item.key)}
-              className={`rounded px-2 py-0.5 transition-colors ${
+              className={`h-7 rounded-full px-3 text-xs tabular-nums transition-colors ${
                 active
-                  ? 'bg-neutral-900 text-white'
-                  : 'border border-neutral-300 text-neutral-600 hover:bg-neutral-100'
+                  ? 'bg-sand-12 font-medium text-white'
+                  : 'text-muted-foreground hover:bg-muted-strong'
               }`}
             >
               {item.label}
@@ -139,15 +141,13 @@ export function RunsPage({
           );
         })}
       </div>
-      {truncated && (
-        <p className="mb-3 text-xs text-neutral-400">仅显示最近 {LIST_LIMIT} 条运行</p>
-      )}
+      {truncated && <p className="mb-3 text-xs text-faint">仅显示最近 {LIST_LIMIT} 条运行</p>}
       {!initialLoaded ? (
         <LoadingRows rows={4} />
       ) : runs.length === 0 && !error ? (
         <EmptyState
           title="还没有运行记录"
-          description="在编辑器里打开一个工作流，点 ▶ 运行 即可发起"
+          description="在编辑器里打开一个工作流，点「运行」即可发起"
           action={
             onGoWorkflows ? (
               <Button variant="primary" onClick={onGoWorkflows}>
@@ -157,29 +157,31 @@ export function RunsPage({
           }
         />
       ) : visibleRuns.length === 0 ? (
-        <p className="text-sm text-neutral-400">该状态下暂无运行记录</p>
+        <p className="text-sm text-muted-foreground">该状态下暂无运行记录</p>
       ) : (
-        <ul className="space-y-2">
+        <ul className="space-y-3">
           {visibleRuns.map((run) => (
             <li key={run.id} className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => onOpenRun(run.id)}
-                className="min-w-0 flex-1 rounded-lg border border-neutral-200 bg-white p-3 text-left transition-colors hover:border-neutral-400"
+                className="min-w-0 flex-1 rounded-lg border border-border-soft bg-card p-3.5 text-left shadow-xs transition-[border-color,box-shadow] hover:border-border-strong hover:shadow-sm"
               >
                 <div className="flex items-center gap-3">
                   <span className="min-w-0 truncate text-sm font-medium">{run.workflowName}</span>
                   <RunStatusBadge status={run.status} />
-                  <span className="shrink-0 text-xs text-neutral-400">v{run.workflowVersion}</span>
-                  <span className="ml-auto shrink-0 text-xs text-neutral-400">
-                    {run.startedAt ? new Date(run.startedAt).toLocaleString('zh-CN') : '—'}
+                  <span className="shrink-0 rounded bg-muted-strong px-1 font-mono text-2xs text-muted-foreground">
+                    v{run.workflowVersion}
+                  </span>
+                  <span className="ml-auto shrink-0 text-xs tabular-nums text-faint">
+                    {run.startedAt ? formatListTime(run.startedAt) : '—'}
                   </span>
                 </div>
                 <div className="mt-1 flex items-center gap-3 text-xs">
-                  <span className="shrink-0 text-neutral-400">耗时 {runElapsed(run, now)}</span>
+                  <span className="shrink-0 tabular-nums text-faint">耗时 {runElapsed(run, now)}</span>
                   {run.status === 'failed' && (
                     <span
-                      className="min-w-0 flex-1 truncate text-red-500"
+                      className="min-w-0 flex-1 truncate text-danger-11"
                       title={run.error ?? undefined}
                     >
                       {/* 错误摘要直接取列表接口的 error 字段（新事件已是中文摘要），截断展示、悬停看全文 */}
@@ -189,7 +191,8 @@ export function RunsPage({
                 </div>
               </button>
               <Button
-                variant="dangerOutline"
+                variant="danger"
+                size="sm"
                 disabled={deletingId === run.id}
                 title="删除该运行记录"
                 onClick={() => void handleDelete(run)}

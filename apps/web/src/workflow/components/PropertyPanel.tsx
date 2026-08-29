@@ -18,6 +18,8 @@ import type {
 
 import { mcpApi, type McpTool } from '../../api/mcp';
 import { providersApi, type ProviderInfo } from '../../api/providers';
+import { XIcon } from '../../components/icons';
+import { Button } from '../../components/ui';
 import { NODE_TYPE_META } from '../types';
 
 /** 同画布其他节点的摘要，供「插入引用」生成 {{节点id.output}} */
@@ -50,9 +52,9 @@ const MANUAL_OPTION = '__manual__';
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <label className="block space-y-1">
-      <span className="text-xs font-medium text-neutral-500">
+      <span className="text-xs font-medium text-muted-foreground">
         {label}
-        {hint && <span className="ml-1 font-normal text-neutral-400">{hint}</span>}
+        {hint && <span className="ml-1 font-normal text-faint">{hint}</span>}
       </span>
       {children}
     </label>
@@ -66,9 +68,9 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 function FieldBlock({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div className="space-y-1">
-      <span className="block text-xs font-medium text-neutral-500">
+      <span className="block text-xs font-medium text-muted-foreground">
         {label}
-        {hint && <span className="ml-1 font-normal text-neutral-400">{hint}</span>}
+        {hint && <span className="ml-1 font-normal text-faint">{hint}</span>}
       </span>
       {children}
     </div>
@@ -76,7 +78,7 @@ function FieldBlock({ label, hint, children }: { label: string; hint?: string; c
 }
 
 const inputClass =
-  'w-full rounded border border-neutral-300 px-2 py-1.5 text-sm focus:border-neutral-500 focus:outline-none';
+  'h-8 w-full rounded-md border border-input bg-card px-2.5 text-sm placeholder:text-faint';
 
 function TextInput(props: {
   value: string;
@@ -156,9 +158,9 @@ function JsonField(props: {
         }}
         rows={props.rows ?? 4}
         placeholder={props.placeholder}
-        className={`${inputClass} font-mono text-xs ${invalid ? 'border-red-400 bg-red-50' : ''}`}
+        className={`${inputClass} py-1.5 font-mono text-xs ${invalid ? 'border-danger-7 bg-danger-2' : ''}`}
       />
-      {invalid && <p className="mt-1 text-[10px] text-red-500">JSON 格式暂不合法，修正后生效</p>}
+      {invalid && <p className="mt-1 text-2xs text-danger-11">JSON 格式暂不合法，修正后生效</p>}
     </div>
   );
 }
@@ -179,7 +181,7 @@ function TextArea(props: {
       onChange={(event) => props.onChange(event.target.value)}
       rows={props.rows ?? 3}
       placeholder={props.placeholder}
-      className={`${inputClass} ${props.mono ? 'font-mono text-xs' : ''}`}
+      className={`${inputClass} py-1.5 ${props.mono ? 'font-mono text-xs' : ''}`}
     />
   );
 }
@@ -189,14 +191,14 @@ function TemplateInsertRow({ peers, onInsert }: { peers: PeerNode[]; onInsert: (
   if (peers.length === 0) return null;
   return (
     <div className="flex flex-wrap items-center gap-1">
-      <span className="text-[10px] text-neutral-400">插入引用：</span>
+      <span className="text-2xs text-faint">插入引用：</span>
       {peers.map((peer) => (
         <button
           key={peer.id}
           type="button"
           title={`插入 {{${peer.id}.output}}`}
           onClick={() => onInsert(`{{${peer.id}.output}}`)}
-          className="max-w-28 truncate rounded border border-neutral-200 bg-neutral-50 px-1.5 py-0.5 text-[10px] text-neutral-600 hover:bg-neutral-100"
+          className="max-w-28 truncate rounded-md bg-muted px-1.5 py-0.5 text-2xs text-muted-foreground transition-colors hover:bg-muted-strong"
         >
           {peer.name || peer.id}
         </button>
@@ -241,7 +243,7 @@ function PromptField({
     <FieldBlock label={label} hint={hint}>
       <TemplateInsertRow peers={peers} onInsert={insertSnippet} />
       <TextArea value={value} onChange={onChange} rows={rows} inputRef={setTextAreaEl} />
-      <p className="text-[10px] text-neutral-400">{TEMPLATE_HELP}</p>
+      <p className="text-2xs text-faint">{TEMPLATE_HELP}</p>
     </FieldBlock>
   );
 }
@@ -307,7 +309,7 @@ function TemplateMapEditor({
               onChange(rebuild(entries.map((entry, i) => (i === index ? [newKey, entry[1]] : entry))));
             }}
             placeholder={keyPlaceholder}
-            className="w-24 rounded border border-neutral-300 px-2 py-1 text-xs"
+            className="h-8 w-24 rounded-md border border-input bg-card px-2.5 text-sm"
           />
           <input
             value={template}
@@ -320,7 +322,7 @@ function TemplateMapEditor({
               onChange(next);
             }}
             placeholder="{{node_x.output}}"
-            className="flex-1 rounded border border-neutral-300 px-2 py-1 font-mono text-xs"
+            className="h-8 min-w-0 flex-1 rounded-md border border-input bg-card px-2.5 font-mono text-xs"
           />
           <button
             type="button"
@@ -329,9 +331,10 @@ function TemplateMapEditor({
               delete next[key];
               onChange(next);
             }}
-            className="rounded border border-red-200 px-2 text-xs text-red-500 hover:bg-red-50"
+            className="shrink-0 rounded-md p-1.5 text-faint transition-colors hover:bg-danger-2 hover:text-danger-11"
+            title="删除该字段"
           >
-            ×
+            <XIcon />
           </button>
         </div>
       ))}
@@ -341,11 +344,11 @@ function TemplateMapEditor({
           if (entries.some(([key]) => key === '')) return;
           onChange({ ...value, '': '' });
         }}
-        className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-50"
+        className="rounded-md border border-input bg-card px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
       >
         + 添加字段
       </button>
-      <p className="text-[10px] text-neutral-400">{TEMPLATE_HELP}</p>
+      <p className="text-2xs text-faint">{TEMPLATE_HELP}</p>
     </div>
   );
 }
@@ -399,7 +402,7 @@ function ProviderPicker({
         <>
           <TextInput value={value} onChange={onChange} placeholder={placeholder ?? 'openai / aggregator'} />
           {!known && value.trim() !== '' && (
-            <p className="text-[10px] text-amber-600">未配置的 Provider，保存后运行会失败</p>
+            <p className="text-2xs text-warning-11">未配置的 Provider，保存后运行会失败</p>
           )}
         </>
       )}
@@ -522,7 +525,7 @@ function ToolArgsForm({
   };
 
   return (
-    <div className="space-y-2 rounded border border-neutral-200 p-2">
+    <div className="space-y-2 rounded-lg border border-border-soft p-2.5">
       {schema.properties.map((property) => {
         const required = schema.required.includes(property.name);
         const current = args[property.name];
@@ -533,11 +536,11 @@ function ToolArgsForm({
         return (
           <div key={property.name}>
             <div className="mb-0.5 flex items-baseline gap-1">
-              <span className="text-xs font-medium text-neutral-500">
-                {required && <span className="mr-0.5 text-red-500">*</span>}
+              <span className="text-xs font-medium text-foreground">
+                {required && <span className="mr-0.5 text-danger-11">*</span>}
                 {property.name}
               </span>
-              <span className="text-[10px] text-neutral-400">{property.type}</span>
+              <span className="text-2xs text-faint">{property.type}</span>
             </div>
             {property.type === 'boolean' ? (
               <select
@@ -588,11 +591,11 @@ function ToolArgsForm({
                 mono
               />
             )}
-            {property.description && <p className="mt-0.5 text-[10px] text-neutral-400">{property.description}</p>}
+            {property.description && <p className="mt-0.5 text-2xs text-faint">{property.description}</p>}
           </div>
         );
       })}
-      <p className="text-[10px] text-neutral-400">参数值支持模板：{'{{input.xxx}}'} 与 {'{{节点id.output}}'}</p>
+      <p className="text-2xs text-faint">参数值支持模板：{'{{input.xxx}}'} 与 {'{{节点id.output}}'}</p>
     </div>
   );
 }
@@ -617,7 +620,7 @@ function ToolForm({
     <div className="space-y-3">
       <Field label="选择 MCP 工具" hint="直调模式：执行到该节点时调用一次">
         {tools.length === 0 ? (
-          toolsError ? (<p className="text-xs text-red-500">工具列表加载失败：{toolsError}</p>) : (<p className="text-xs text-neutral-400">注册表为空，请先在 MCP Servers 页添加</p>)
+          toolsError ? (<p className="text-xs text-danger-11">工具列表加载失败：{toolsError}</p>) : (<p className="text-xs text-faint">注册表为空，请先在 MCP Servers 页添加</p>)
         ) : (
           <select
             value={`${data.server ?? ''}:${data.tool ?? ''}`}
@@ -639,8 +642,8 @@ function ToolForm({
       {schema ? (
         <FieldBlock label="参数" hint="标 * 为必填，按工具 Schema 自动生成">
           <ToolArgsForm args={data.args ?? {}} schema={schema} onChange={(args) => onChange({ args })} />
-          <details className="rounded border border-neutral-200 p-2">
-            <summary className="cursor-pointer text-xs font-medium text-neutral-500">
+          <details className="rounded-lg border border-border-soft p-2.5">
+            <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
               高级：编辑原始 JSON
             </summary>
             <div className="mt-2">
@@ -681,16 +684,16 @@ function ProvidersWarning({
 }) {
   if (!error) return null;
   return (
-    <div className="flex items-center gap-2 rounded border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
+    <div className="flex items-center gap-2 rounded-md border border-warning-6 bg-warning-3 px-2.5 py-1.5 text-xs text-warning-12">
       <span className="min-w-0 flex-1">
         无法加载可用模型列表，可手动填写
-        <span className="ml-1 text-amber-600/80">（{error}）</span>
+        <span className="ml-1 text-warning-11">（{error}）</span>
       </span>
       <button
         type="button"
         onClick={onRetry}
         disabled={retrying}
-        className="shrink-0 rounded border border-amber-400 bg-white px-1.5 py-0.5 text-amber-700 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+        className="shrink-0 rounded-md border border-warning-7 bg-card px-1.5 py-0.5 text-warning-11 transition-colors hover:bg-warning-2 disabled:cursor-not-allowed disabled:opacity-60"
       >
         {retrying ? '重试中…' : '重试'}
       </button>
@@ -754,9 +757,9 @@ function AgentForm({
       />
       <Field label="绑定 MCP 工具" hint="绑定后，模型会在对话中自主决定何时调用">
         {tools.length === 0 ? (
-          toolsError ? (<p className="text-xs text-red-500">工具列表加载失败：{toolsError}</p>) : (<p className="text-xs text-neutral-400">注册表为空，请先在 MCP Servers 页添加</p>)
+          toolsError ? (<p className="text-xs text-danger-11">工具列表加载失败：{toolsError}</p>) : (<p className="text-xs text-faint">注册表为空，请先在 MCP Servers 页添加</p>)
         ) : (
-          <div className="max-h-40 space-y-1 overflow-auto rounded border border-neutral-200 p-2">
+          <div className="max-h-40 space-y-1 overflow-auto rounded-lg border border-border-soft p-2.5">
             {tools.map((tool) => {
               const [server, name] = tool.qualifiedName.split(':');
               const checked = bound.some((item) => item.server === server && item.tool === name);
@@ -772,8 +775,9 @@ function AgentForm({
                           : [...bound, { server: server!, tool: name! }],
                       })
                     }
+                    className="h-3.5 w-3.5 accent-brand-9"
                   />
-                  <code className="text-[11px]">{tool.qualifiedName}</code>
+                  <code className="text-2xs">{tool.qualifiedName}</code>
                 </label>
               );
             })}
@@ -865,7 +869,7 @@ function ConditionForm({
   return (
     <div className="space-y-2">
       {branches.map((branch, index) => (
-        <div key={index} className="space-y-1 rounded border border-neutral-200 p-2">
+        <div key={index} className="space-y-1 rounded-lg border border-border-soft p-2.5">
           <div className="flex gap-1">
             <input
               value={branch.id}
@@ -875,7 +879,7 @@ function ConditionForm({
                 onChange({ branches: next });
               }}
               placeholder="分支 id（sourceHandle）"
-              className="w-32 rounded border border-neutral-300 px-2 py-1 font-mono text-xs"
+              className="h-8 w-32 rounded-md border border-input bg-card px-2.5 font-mono text-xs"
             />
             <input
               value={branch.label ?? ''}
@@ -885,14 +889,15 @@ function ConditionForm({
                 onChange({ branches: next });
               }}
               placeholder="显示名（可选）"
-              className="flex-1 rounded border border-neutral-300 px-2 py-1 text-xs"
+              className="h-8 min-w-0 flex-1 rounded-md border border-input bg-card px-2.5 text-sm"
             />
             <button
               type="button"
               onClick={() => onChange({ branches: branches.filter((_, i) => i !== index) })}
-              className="rounded border border-red-200 px-2 text-xs text-red-500 hover:bg-red-50"
+              className="shrink-0 rounded-md p-1.5 text-faint transition-colors hover:bg-danger-2 hover:text-danger-11"
+              title="删除该分支"
             >
-              ×
+              <XIcon />
             </button>
           </div>
           <input
@@ -903,9 +908,9 @@ function ConditionForm({
               onChange({ branches: next });
             }}
             placeholder="表达式，如 result.score > 0.5（默认分支填 true）"
-            className="w-full rounded border border-neutral-300 px-2 py-1 font-mono text-xs"
+            className="h-8 w-full rounded-md border border-input bg-card px-2.5 font-mono text-xs"
           />
-          <p className="text-[10px] leading-relaxed text-neutral-400">
+          <p className="text-2xs leading-relaxed text-faint">
             {'可用变量：input.xxx（运行输入）与各上游节点 节点id.output；比较 > >= < <= == !=，逻辑 && || !；最后一个恒真分支作为默认路径。'}
           </p>
         </div>
@@ -917,7 +922,7 @@ function ConditionForm({
             branches: [...branches, { id: `branch_${branches.length + 1}`, expression: 'true' }],
           })
         }
-        className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-50"
+        className="rounded-md border border-input bg-card px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
       >
         + 添加分支
       </button>
@@ -1002,21 +1007,22 @@ export function PropertyPanel({ node, onChange, onDelete, peerNodes }: PropertyP
   const peers: PeerNode[] = peerNodes ?? flowPeers;
 
   return (
-    <aside className="flex w-72 shrink-0 flex-col overflow-auto border-l border-neutral-200 bg-white p-3">
+    <aside className="flex w-72 shrink-0 flex-col overflow-auto border-l border-border bg-card p-4">
       <header className="mb-3 flex items-center gap-2">
-        <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${meta.color}`}>
+        <span className={`rounded px-1.5 py-0.5 text-2xs font-semibold ${meta.color}`}>
           {meta.label}
         </span>
-        <code className="text-[10px] text-neutral-400">{node.id}</code>
-        <button
-          type="button"
+        <code className="text-2xs text-faint">{node.id}</code>
+        <Button
+          variant="danger"
+          size="sm"
+          className="ml-auto"
           onClick={() => {
             if (window.confirm(`删除节点「${data.name}」及其连线？`)) onDelete();
           }}
-          className="ml-auto rounded border border-red-200 px-2 py-0.5 text-xs text-red-500 hover:bg-red-50"
         >
           删除节点
-        </button>
+        </Button>
       </header>
 
       <div className="space-y-3">
@@ -1086,9 +1092,9 @@ export function PropertyPanel({ node, onChange, onDelete, peerNodes }: PropertyP
 
         {data.nodeType === 'condition' && (
           <div className="space-y-2">
-            <p className="text-xs font-medium text-neutral-500">
+            <p className="text-xs font-medium text-muted-foreground">
               分支条件
-              <span className="ml-1 font-normal text-neutral-400">按表达式命中分支，出边的 sourceHandle 对应分支 id</span>
+              <span className="ml-1 font-normal text-faint">按表达式命中分支，出边的 sourceHandle 对应分支 id</span>
             </p>
             <ConditionForm
               data={data as unknown as ConditionNodeData}
@@ -1131,7 +1137,7 @@ export function PropertyPanel({ node, onChange, onDelete, peerNodes }: PropertyP
                   if (hasContent && !window.confirm('已有子图内容，确定覆盖为骨架？')) return;
                   onChange({ subgraph: buildSubgraphSkeleton() });
                 }}
-                className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-50"
+                className="rounded-md border border-input bg-card px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               >
                 插入子图骨架（start → end）
               </button>
@@ -1181,8 +1187,8 @@ export function PropertyPanel({ node, onChange, onDelete, peerNodes }: PropertyP
 
         {/* 节点级韧性配置：暂存于 data.__nodeExtras，保存时还原为定义顶层字段（见 convert.ts） */}
         {data.nodeType !== 'human' && (
-          <details className="rounded border border-neutral-200 p-2">
-            <summary className="cursor-pointer text-xs font-medium text-neutral-500">
+          <details className="rounded-lg border border-border-soft p-2.5">
+            <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
               高级：超时与重试
             </summary>
             <div className="mt-2 grid grid-cols-2 gap-2">
@@ -1211,7 +1217,7 @@ export function PropertyPanel({ node, onChange, onDelete, peerNodes }: PropertyP
                 />
               </Field>
             </div>
-            <p className="mt-1 text-[10px] text-neutral-400">
+            <p className="mt-1 text-2xs text-faint">
               超时未配置时不限制；重试按指数退避（见文档）。
             </p>
           </details>

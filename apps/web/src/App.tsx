@@ -4,7 +4,14 @@ import { mcpApi } from './api/mcp';
 import { providersApi } from './api/providers';
 import { runsApi } from './api/runs';
 import { workflowsApi } from './api/workflows';
-import { Button, LoadingRows, Modal } from './components/ui';
+import { formatListTime } from './lib/format';
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  PlayIcon,
+  PlusIcon,
+} from './components/icons';
+import { Button, EmptyState, LoadingRows, Modal } from './components/ui';
 import { SettingsPage } from './pages/SettingsPage';
 import { McpServersPage } from './pages/McpServersPage';
 import { RunDetailPage } from './pages/RunDetailPage';
@@ -36,6 +43,9 @@ function parseHash(hash: string): Route {
       return { kind: 'settings' };
     case 'runs':
       return segments[1] ? { kind: 'run', id: segments[1] } : { kind: 'runs' };
+    case 'workflows':
+      // #/workflows/:id 与 #/editor/:id 等价：URL 与栏目语义保持一致
+      return segments[1] ? { kind: 'editor', workflowId: segments[1] } : { kind: 'workflows' };
     case 'editor':
       return { kind: 'editor', workflowId: segments[1] ?? null };
     default:
@@ -276,15 +286,27 @@ export function App() {
   ];
 
   return (
-    <div className="flex h-screen flex-col bg-neutral-50 text-neutral-900">
-      <header className="flex items-center justify-between border-b border-neutral-200 px-6 py-3">
+    <div className="flex h-screen flex-col bg-background text-foreground">
+      <header className="flex h-12 items-center justify-between border-b border-border bg-card px-4">
         <button
           type="button"
           onClick={() => go('/workflows')}
-          className="flex items-baseline gap-2 text-left"
+          className="flex items-center gap-2 text-left"
         >
-          <h1 className="text-lg font-semibold">FlowAgent</h1>
-          <span className="hidden text-xs text-neutral-400 sm:inline">Durable Agent Runtime</span>
+          <svg width={18} height={18} viewBox="0 0 18 18" fill="none" aria-hidden>
+            <circle cx="3.8" cy="13.6" r="2.6" fill="var(--sand-12)" />
+            <circle cx="14.2" cy="4.4" r="2.6" fill="var(--sand-12)" />
+            <path
+              d="M5.4 11.6 9.2 9.9 12.6 6.4"
+              stroke="var(--brand-9)"
+              strokeWidth="1.75"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          <span className="text-[15px] font-semibold tracking-tight">FlowAgent</span>
+          <span className="h-4 w-px bg-border" aria-hidden />
+          <span className="hidden text-xs text-faint lg:inline">Durable Agent Runtime</span>
         </button>
         <nav className="flex gap-1 text-sm">
           {navItems.map((item) => (
@@ -292,10 +314,10 @@ export function App() {
               key={item.path}
               type="button"
               onClick={() => go(item.path)}
-              className={`rounded px-3 py-1 transition-colors ${
+              className={`rounded-md px-2.5 py-1 transition-colors ${
                 item.active
-                  ? 'bg-neutral-900 text-white'
-                  : 'text-neutral-600 hover:bg-neutral-100'
+                  ? 'bg-muted-strong font-medium text-foreground'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground'
               }`}
             >
               {item.label}
@@ -306,7 +328,7 @@ export function App() {
 
       {/* 全局错误横幅：任何页面的失败都可见；默认单行截断，可展开看全文 */}
       {error && (
-        <p className="flex items-start gap-2 bg-red-50 px-4 py-2 text-sm text-red-600">
+        <p className="flex items-start gap-2 border-b border-danger-6 bg-danger-2 px-4 py-2 text-sm text-danger-11">
           <span
             className={`min-w-0 flex-1 ${
               errorExpanded ? 'break-all whitespace-pre-wrap' : 'truncate'
@@ -317,7 +339,7 @@ export function App() {
           <button
             type="button"
             onClick={() => setErrorExpanded((value) => !value)}
-            className="shrink-0 rounded px-1 text-xs text-red-500 hover:bg-red-100"
+            className="shrink-0 rounded px-1 text-xs text-danger-11 hover:bg-danger-3"
           >
             {errorExpanded ? '收起' : '展开'}
           </button>
@@ -327,7 +349,7 @@ export function App() {
               setError(null);
               setErrorExpanded(false);
             }}
-            className="shrink-0 rounded px-1 text-xs text-red-400 hover:bg-red-100"
+            className="shrink-0 rounded px-1 text-xs text-danger-11 hover:bg-danger-3"
           >
             关闭
           </button>
@@ -336,7 +358,7 @@ export function App() {
 
       {/* 编辑器内：未配置 Provider 的常驻提醒 */}
       {route.kind === 'editor' && providerCount === 0 && (
-        <div className="flex items-center gap-3 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+        <div className="flex items-center gap-3 border-b border-warning-6 bg-warning-3 px-4 py-2 text-sm text-warning-12">
           <span>尚未配置任何 LLM Provider，LLM / Agent 节点将无法运行。</span>
           <Button variant="secondary" onClick={() => go('/settings')}>
             查看配置方法
@@ -377,15 +399,16 @@ export function App() {
         </main>
       ) : (
         <main className="mx-auto w-full max-w-3xl flex-1 overflow-auto p-6">
-          <div className="mb-4 flex items-center justify-between">
+          <div className="mb-6 flex items-end justify-between">
             <div>
-              <h2 className="text-sm font-medium text-neutral-600">工作流</h2>
-              <p className="mt-0.5 text-xs text-neutral-400">
+              <h2 className="text-lg font-semibold">工作流</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
                 编排 LLM 与 MCP 工具的持久化执行流程；运行记录见「运行」页
               </p>
             </div>
             <Button variant="primary" disabled={creating} onClick={() => void handleCreate()}>
-              {creating ? '创建中…' : '+ 新建工作流'}
+              <PlusIcon />
+              {creating ? '创建中…' : '新建工作流'}
             </Button>
           </div>
 
@@ -395,59 +418,57 @@ export function App() {
               value={searchText}
               onChange={(event) => setSearchText(event.target.value)}
               placeholder="搜索工作流名称…"
-              className="w-full max-w-xs rounded border border-neutral-300 px-2 py-1.5 text-sm focus:border-neutral-500 focus:outline-none"
+              className="h-8 w-72 rounded-md border border-input bg-card px-2.5 text-sm"
             />
           </div>
 
           {/* 首次使用三步引导 */}
           {(providerCount === 0 || serverCount === 0 || (workflows.length === 0 && !listLoading)) && (
-            <ol className="mb-4 space-y-1 rounded-lg border border-blue-200 bg-blue-50/60 p-4 text-sm text-neutral-700">
-              <li className="font-medium text-blue-800">第一次使用？按顺序完成三步：</li>
+            <ol className="mb-4 space-y-1.5 rounded-xl border border-brand-6 bg-brand-2 p-4 text-sm">
+              <li className="text-sm font-medium text-brand-11">第一次使用？按顺序完成三步：</li>
               {[
                 {
                   done: (providerCount ?? 0) > 0,
-                  step: '① 配置 LLM Provider（API Key）',
+                  step: '配置 LLM Provider（API Key）',
                   desc: '在设置页按指引填写 .env 并重启服务',
                   action: () => go('/settings'),
                   actionLabel: '去设置',
                 },
                 {
                   done: (serverCount ?? 0) > 0,
-                  step: '② 注册 MCP Server（可选，工具节点需要）',
+                  step: '注册 MCP Server（可选，工具节点需要）',
                   desc: '例如自带的 search / sandbox / report demo Server',
                   action: () => go('/mcp'),
                   actionLabel: '去注册',
                 },
                 {
                   done: workflows.length > 0,
-                  step: '③ 新建或导入工作流并运行',
-                  desc: '画布上拖入节点连线，点 ▶ 运行',
+                  step: '新建或导入工作流并运行',
+                  desc: '画布上拖入节点连线，点「运行」发起',
                   action: () => void handleCreate(),
                   actionLabel: '新建工作流',
                 },
-              ].map((item) => (
+              ].map((item, index) => (
                 <li key={item.step} className="flex items-center gap-2">
                   <span
-                    className={`inline-block h-2 w-2 shrink-0 rounded-full ${
-                      item.done ? 'bg-emerald-500' : 'bg-neutral-300'
+                    className={`grid h-5 w-5 shrink-0 place-items-center rounded-full bg-white ${
+                      item.done ? 'text-success-11' : 'text-2xs text-muted-foreground'
                     }`}
                     aria-hidden
-                  />
-                  <span className={item.done ? 'text-neutral-400 line-through' : 'font-medium'}>
+                  >
+                    {item.done ? <CheckIcon /> : index + 1}
+                  </span>
+                  <span className={item.done ? 'text-muted-foreground line-through' : 'font-medium'}>
                     {item.step}
                   </span>
                   {!item.done && (
                     <>
-                      <span className="hidden truncate text-xs text-neutral-500 md:inline">
+                      <span className="hidden truncate text-xs text-muted-foreground md:inline">
                         {item.desc}
                       </span>
-                      <button
-                        type="button"
-                        onClick={item.action}
-                        className="ml-auto shrink-0 rounded border border-blue-300 bg-white px-2 py-0.5 text-xs text-blue-700 hover:bg-blue-100"
-                      >
+                      <Button variant="secondary" size="sm" className="ml-auto shrink-0" onClick={item.action}>
                         {item.actionLabel}
-                      </button>
+                      </Button>
                     </>
                   )}
                 </li>
@@ -458,39 +479,47 @@ export function App() {
           {listLoading ? (
             <LoadingRows rows={3} />
           ) : workflows.length === 0 && !error ? (
-            <p className="text-sm text-neutral-400">
-              {searchQuery ? '没有匹配的工作流' : '暂无工作流'}
-            </p>
+            <EmptyState
+              title={searchQuery ? '没有匹配的工作流' : '暂无工作流'}
+              description={
+                searchQuery ? '换个名称关键字再试试' : '点击右上角「新建工作流」开始编排'
+              }
+            />
           ) : (
-            <ul className="space-y-2">
+            <ul className="space-y-3">
               {workflows.map((workflow) => (
                 <li key={workflow.id} className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={() => go(`/editor/${workflow.id}`)}
-                    className="group flex min-w-0 flex-1 items-center gap-3 rounded-lg border border-neutral-200 bg-white p-3 text-left transition-colors hover:border-neutral-400"
+                    className="group flex min-w-0 flex-1 items-center gap-3 rounded-lg border border-border-soft bg-card p-3.5 text-left shadow-xs transition-[border-color,box-shadow] hover:border-border-strong hover:shadow-sm"
                   >
-                    <span className="min-w-0 truncate text-sm font-medium group-hover:text-blue-700">
+                    <span className="min-w-0 truncate text-sm font-medium transition-colors group-hover:text-brand-11">
                       {workflow.name}
                     </span>
-                    <span className="text-xs text-neutral-400">v{workflow.version}</span>
+                    <span className="rounded bg-muted-strong px-1 font-mono text-2xs text-muted-foreground">
+                      v{workflow.version}
+                    </span>
                     <span className="ml-auto flex items-center gap-2">
                       <span
-                        className="rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-xs text-blue-600 opacity-0 transition-opacity group-hover:opacity-100"
+                        className="flex items-center gap-0.5 rounded bg-muted px-1.5 py-0.5 text-2xs text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"
                         aria-hidden
                       >
-                        打开编辑器 ▸
+                        打开编辑器
+                        <ChevronDownIcon className="-rotate-90" />
                       </span>
-                      <span className="text-xs text-neutral-400">
-                        {new Date(workflow.updatedAt).toLocaleString('zh-CN')}
+                      <span className="text-xs tabular-nums text-faint">
+                        {formatListTime(workflow.updatedAt)}
                       </span>
                     </span>
                   </button>
-                  <Button variant="accent" onClick={() => handleRun(workflow.id)}>
-                    ▶ 运行
+                  <Button variant="accent" size="sm" onClick={() => handleRun(workflow.id)}>
+                    <PlayIcon />
+                    运行
                   </Button>
                   <Button
-                    variant="dangerOutline"
+                    variant="danger"
+                    size="sm"
                     title="删除工作流"
                     onClick={() => void handleDelete(workflow)}
                   >
@@ -626,40 +655,42 @@ function RunInputDialog({
   return (
     <Modal title={<span>运行「{name}」</span>} onClose={onClose} width="w-[34rem]">
       {loadFailed ? (
-        <p className="mt-3 text-xs text-amber-600">
+        <p className="mt-3 text-xs text-warning-11">
           无法读取工作流定义（可能尚未保存），可直接在 JSON 模式下输入。
         </p>
       ) : definition === null ? (
-        <p className="mt-3 text-xs text-neutral-400">正在读取工作流定义…</p>
+        <p className="mt-3 text-xs text-faint">正在读取工作流定义…</p>
       ) : (
         <div className="mt-2">
-          <div className="mb-2 flex items-center gap-2 text-xs">
-            <span className="text-neutral-500">输入方式：</span>
-            {(['form', 'json'] as const).map((item) => (
-              <button
-                key={item}
-                type="button"
-                disabled={fields.length === 0 && item === 'form'}
-                onClick={() => setMode(item)}
-                className={`rounded px-2 py-0.5 transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
-                  mode === item
-                    ? 'bg-neutral-900 text-white'
-                    : 'border border-neutral-300 text-neutral-600 hover:bg-neutral-100'
-                }`}
-              >
-                {item === 'form' ? `表单${fields.length > 0 ? `（${fields.length} 项）` : ''}` : 'JSON'}
-              </button>
-            ))}
+          <div className="mb-2 flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">输入方式：</span>
+            <div className="inline-flex rounded-md bg-muted-strong p-0.5">
+              {(['form', 'json'] as const).map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  disabled={fields.length === 0 && item === 'form'}
+                  onClick={() => setMode(item)}
+                  className={`rounded-[5px] px-3 py-1 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                    mode === item
+                      ? 'bg-card font-medium text-foreground shadow-xs'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {item === 'form' ? `表单${fields.length > 0 ? `（${fields.length} 项）` : ''}` : 'JSON'}
+                </button>
+              ))}
+            </div>
           </div>
 
           {mode === 'form' ? (
             <div className="max-h-[45vh] space-y-3 overflow-auto pr-1">
               {fields.map((field) => (
                 <label key={field.name} className="block">
-                  <span className="text-xs font-medium text-neutral-700">
+                  <span className="text-xs font-medium text-foreground">
                     {field.name}
-                    {field.required && <span className="ml-0.5 text-red-500">*</span>}
-                    <span className="ml-2 font-normal text-neutral-400">
+                    {field.required && <span className="ml-0.5 text-danger-11">*</span>}
+                    <span className="ml-2 font-normal text-faint">
                       以 {'{{input.' + field.name + '}}'} 在节点中引用
                     </span>
                   </span>
@@ -675,7 +706,7 @@ function RunInputDialog({
                           ? '粘贴要审查的代码 diff，例如：\n--- a/app.ts\n+++ b/app.ts\n@@ -1,2 +1,3 @@\n+eval(userInput)'
                           : field.description ?? `填写 ${field.name}`
                       }
-                      className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 font-mono text-xs focus:border-neutral-500 focus:outline-none"
+                      className="mt-1 min-h-8 w-full rounded-md border border-input bg-card px-2.5 py-1.5 font-mono text-sm"
                     />
                   ) : field.kind === 'boolean' ? (
                     <select
@@ -683,7 +714,7 @@ function RunInputDialog({
                       onChange={(event) =>
                         setValues((previous) => ({ ...previous, [field.name]: event.target.value }))
                       }
-                      className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-xs focus:border-neutral-500 focus:outline-none"
+                      className="mt-1 h-8 w-full rounded-md border border-input bg-card px-2.5 text-sm"
                     >
                       <option value="">不传（保持未设置）</option>
                       <option value="true">true</option>
@@ -697,15 +728,15 @@ function RunInputDialog({
                         setValues((previous) => ({ ...previous, [field.name]: event.target.value }))
                       }
                       placeholder={field.description ?? `填写 ${field.name}`}
-                      className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-xs focus:border-neutral-500 focus:outline-none"
+                      className="mt-1 h-8 w-full rounded-md border border-input bg-card px-2.5 text-sm"
                     />
                   )}
                   {field.description && field.kind !== 'longText' && (
-                    <span className="mt-0.5 block text-xs text-neutral-400">{field.description}</span>
+                    <span className="mt-0.5 block text-xs text-faint">{field.description}</span>
                   )}
                 </label>
               ))}
-              <p className="text-xs leading-relaxed text-neutral-400">
+              <p className="text-xs leading-relaxed text-faint">
                 这些字段来自工作流的模板引用与输入定义。复杂嵌套结构请切换到 JSON 模式。
               </p>
             </div>
@@ -716,9 +747,9 @@ function RunInputDialog({
                 onChange={(event) => setJsonText(event.target.value)}
                 placeholder={`${jsonSkeleton}\n// 工作流内以 {{input.xxx}} 引用这些字段`}
                 rows={8}
-                className="w-full rounded border border-neutral-300 px-2 py-1 font-mono text-xs focus:border-neutral-500 focus:outline-none"
+                className="min-h-8 w-full rounded-md border border-input bg-card px-2.5 py-1.5 font-mono text-sm"
               />
-              <p className="mt-1 text-xs text-neutral-400">
+              <p className="mt-1 text-xs text-faint">
                 可留空。骨架中的字段名来自该工作流的模板引用，按需填值。
               </p>
             </div>
@@ -727,7 +758,7 @@ function RunInputDialog({
       )}
 
       {inlineError && (
-        <p className="mt-2 rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-600">
+        <p className="mt-2 rounded-md border border-danger-6 bg-danger-2 px-2.5 py-1.5 text-xs text-danger-11">
           {inlineError}
         </p>
       )}

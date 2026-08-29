@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { validateWorkflowDefinition, type NodeType } from '@flowagent/shared';
 
 import { workflowsApi, WorkflowApiError } from '../api/workflows';
+import { ArrowLeftIcon, CheckIcon, PlayIcon } from '../components/icons';
 import { Button } from '../components/ui';
 import { FlowAgentNode } from '../workflow/components/FlowAgentNode';
 import { NodePalette } from '../workflow/components/NodePalette';
@@ -553,23 +554,30 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center gap-3 border-b border-neutral-200 bg-white px-4 py-2">
-        <button
-          type="button"
+      <header className="flex h-12 items-center gap-3 border-b border-border bg-card px-4">
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={onBack}
           title={dirty ? '画布有未保存修改，离开前会先确认' : undefined}
-          className="rounded px-2 py-1 text-sm text-neutral-600 hover:bg-neutral-100"
         >
-          ← 返回{dirty ? ' •' : ''}
-        </button>
+          <ArrowLeftIcon />
+          返回
+          {dirty && <span className="h-1.5 w-1.5 rounded-full bg-warning-9" aria-hidden />}
+        </Button>
         <input
           value={name}
           maxLength={100}
           onChange={(event) => setName(event.target.value)}
           title="工作流名称（最多 100 字）"
-          className="w-56 rounded border border-transparent px-2 py-1 text-sm font-medium hover:border-neutral-300 focus:border-neutral-400 focus:outline-none"
+          className="w-56 rounded-md border border-transparent px-2 py-1 text-sm font-medium hover:bg-muted focus:bg-card"
         />
-        {record && <span className="text-xs text-neutral-400">v{record.version}</span>}
+        {record && (
+          <span className="rounded bg-muted-strong px-1 font-mono text-2xs text-muted-foreground">
+            v{record.version}
+          </span>
+        )}
+        <span className="h-4 w-px bg-border" aria-hidden />
         <input
           ref={fileInputRef}
           type="file"
@@ -581,57 +589,58 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
             event.target.value = '';
           }}
         />
-        <Button variant="secondary" onClick={() => fileInputRef.current?.click()}>
+        <Button variant="ghost" size="sm" onClick={() => fileInputRef.current?.click()}>
           导入 JSON
         </Button>
-        <Button variant="secondary" onClick={handleExport}>
+        <Button variant="ghost" size="sm" onClick={handleExport}>
           导出 JSON
         </Button>
-        <Button
-          variant={busy || dirty ? 'accent' : 'secondary'}
-          disabled={busy}
-          onClick={() => void handleSave()}
-          className="ml-auto"
-        >
-          {busy ? '保存中…' : dirty ? '● 保存改动' : '已保存'}
-        </Button>
-        <Button
-          variant="accent"
-          disabled={busy}
-          title={record ? '校验并保存后运行' : '先保存工作流再运行'}
-          onClick={async () => {
-            // 校验或保存失败必须中断：绝不能拿着旧版本发起运行误导用户
-            const savedRecord = await handleSave();
-            if (!savedRecord) return;
-            onRun(savedRecord.id);
-          }}
-        >
-          ▶ 运行
-        </Button>
-        {saved && !dirty && <span className="text-xs text-green-600">{saved}</span>}
-        {saved && dirty && <span className="text-xs text-neutral-400">有未保存修改</span>}
+        <div className="ml-auto flex items-center gap-2">
+          {dirty ? (
+            <span className="text-xs text-faint">有未保存修改</span>
+          ) : saved ? (
+            <span className="inline-flex items-center gap-1 text-xs text-success-11">
+              <CheckIcon />
+              {saved}
+            </span>
+          ) : null}
+          <Button variant="primary" disabled={busy} onClick={() => void handleSave()}>
+            {busy ? '保存中…' : '保存'}
+          </Button>
+          <Button
+            variant="accent"
+            disabled={busy}
+            title={record ? '校验并保存后运行' : '先保存工作流再运行'}
+            className="px-3.5"
+            onClick={async () => {
+              // 校验或保存失败必须中断：绝不能拿着旧版本发起运行误导用户
+              const savedRecord = await handleSave();
+              if (!savedRecord) return;
+              onRun(savedRecord.id);
+            }}
+          >
+            <PlayIcon />
+            运行
+          </Button>
+        </div>
       </header>
       {loadError ? (
         <div className="flex flex-1 items-center justify-center p-8">
-          <div className="max-w-md rounded-lg border border-amber-300 bg-amber-50 px-6 py-5 text-center shadow-sm">
-            <p className="text-sm font-medium text-amber-800">加载工作流失败：{loadError}</p>
-            <button
-              type="button"
-              onClick={handleRetryLoad}
-              className="mt-3 rounded bg-amber-500 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-amber-600"
-            >
+          <div className="max-w-md rounded-lg border border-warning-6 bg-warning-2 px-6 py-5 text-center shadow-xs">
+            <p className="text-sm font-medium text-warning-12">加载工作流失败：{loadError}</p>
+            <Button variant="secondary" className="mt-3" onClick={handleRetryLoad}>
               重试
-            </button>
+            </Button>
           </div>
         </div>
       ) : (
         <>
           {errors.length > 0 && (
-            <div className="border-b border-red-100 bg-red-50 px-4 py-2">
-              <p className="text-xs font-medium text-red-600">
+            <div className="border-b border-danger-6 bg-danger-2 px-4 py-2">
+              <p className="text-xs font-medium text-danger-11">
                 校验未通过（主图必须为严格 DAG）：
               </p>
-              <ul className="max-h-40 list-inside list-disc space-y-0.5 overflow-auto text-xs text-red-500">
+              <ul className="max-h-40 list-inside list-disc space-y-0.5 overflow-auto text-xs text-danger-11">
                 {errors.map((message, index) => {
                   const nodeId = locateNodeId(message);
                   const nodeName = nodeId ? nodeNameById.get(nodeId) : undefined;
@@ -645,7 +654,7 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
                           type="button"
                           title="点击在画布中定位该节点"
                           onClick={() => focusNode(nodeId)}
-                          className="text-left underline decoration-dotted underline-offset-2 transition-colors hover:text-red-700"
+                          className="text-left underline decoration-dotted underline-offset-2 transition-colors hover:text-danger-12"
                         >
                           {label}
                         </button>
@@ -659,19 +668,20 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
             </div>
           )}
           {actionError && (
-            <div className="border-b border-red-100 bg-red-50 px-4 py-2">
-              <p className="text-xs font-medium text-red-600">{actionError}</p>
+            <div className="border-b border-danger-6 bg-danger-2 px-4 py-2">
+              <p className="text-xs font-medium text-danger-11">{actionError}</p>
             </div>
           )}
           {conflict && (
-            <div className="flex items-center gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2">
-              <p className="min-w-0 flex-1 text-xs font-medium text-amber-800">
+            <div className="flex items-center gap-3 border-b border-warning-6 bg-warning-3 px-4 py-2">
+              <p className="min-w-0 flex-1 text-xs font-medium text-warning-12">
                 {conflict.currentVersion !== null
                   ? `工作流已被其他会话修改（当前版本 v${conflict.currentVersion}），请刷新后重试`
                   : '工作流已被其他会话修改，请刷新后重试'}
               </p>
               <Button
                 variant="secondary"
+                size="sm"
                 disabled={busy}
                 title="丢弃本地画布改动，重新读取服务端最新版本"
                 onClick={handleConflictReload}
@@ -682,7 +692,7 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
           )}
           <div className="flex min-h-0 flex-1">
             <NodePalette onAdd={handleAddNode} />
-            <div className="relative min-w-0 flex-1">
+            <div className="relative min-w-0 flex-1 bg-sand-2">
               <ReactFlow
                 nodes={nodes}
                 edges={edges}
@@ -698,27 +708,34 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
                 onDrop={onDrop}
                 fitView
                 deleteKeyCode={['Backspace', 'Delete']}
+                defaultEdgeOptions={{ style: { stroke: '#99938A', strokeWidth: 1.5 } }}
               >
-                <Background variant={BackgroundVariant.Dots} gap={20} />
+                <Background variant={BackgroundVariant.Dots} gap={24} size={1.6} color="#CCC8C0" />
                 <Controls />
-                <MiniMap pannable zoomable />
+                <MiniMap
+                  pannable
+                  zoomable
+                  nodeColor="#B3ADA3"
+                  maskColor="rgb(251 251 250 / 0.75)"
+                  style={{ border: '1px solid var(--sand-5)', borderRadius: 8, boxShadow: 'var(--shadow-sm)' }}
+                />
               </ReactFlow>
               {showEmptyHint && (
                 <div className="pointer-events-none absolute inset-x-0 top-[26%] z-10 flex justify-center">
-                  <div className="rounded-lg border border-neutral-200 bg-white/70 px-5 py-3 text-center text-xs text-neutral-500 shadow-sm backdrop-blur-[1px]">
+                  <div className="rounded-lg border border-border-soft bg-card/70 px-5 py-3 text-center text-xs text-muted-foreground shadow-xs backdrop-blur-[1px]">
                     从左侧面板添加步骤：LLM / 工具 / 条件 / 循环 / 人工审批…
                   </div>
                 </div>
               )}
               {lastDeletion && (
                 <div className="absolute bottom-4 left-1/2 z-10 -translate-x-1/2">
-                  <div className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-xs text-neutral-600 shadow-md">
+                  <div className="flex items-center gap-2 rounded-lg border border-border-soft bg-card px-3 py-1.5 text-xs text-muted-foreground shadow-md">
                     <span>已删除{lastDeletion.label}</span>
                     <button
                       type="button"
                       onClick={undoDelete}
                       title="撤销最近一次删除（Ctrl+Z）"
-                      className="rounded border border-neutral-300 bg-white px-1.5 py-0.5 font-medium text-neutral-700 transition-colors hover:bg-neutral-100"
+                      className="rounded-md px-1.5 py-0.5 font-medium text-foreground transition-colors hover:bg-muted-strong"
                     >
                       撤销 (Ctrl+Z)
                     </button>

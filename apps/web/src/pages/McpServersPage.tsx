@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { mcpApi, type McpServer, type McpTool } from '../api/mcp';
-import { Button, CopyButton, EmptyState, LoadingRows, Modal } from '../components/ui';
+import { RefreshIcon } from '../components/icons';
+import { Button, CopyButton, EmptyState, LoadingRows, Modal, StatusBadge } from '../components/ui';
+import type { StatusTone } from '../components/ui';
 
-const STATUS_STYLES: Record<string, string> = {
-  connected: 'bg-green-100 text-green-700',
-  connecting: 'bg-yellow-100 text-yellow-700',
-  error: 'bg-red-100 text-red-700',
-  disconnected: 'bg-neutral-100 text-neutral-500',
+const STATUS_TONES: Record<string, StatusTone> = {
+  connected: 'success',
+  connecting: 'warning',
+  error: 'danger',
+  disconnected: 'neutral',
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -160,53 +162,63 @@ export function McpServersPage() {
           刷新
         </Button>
       </div>
-      {error && <p className="rounded bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
+      {error && (
+        <p className="rounded-md border border-danger-6 bg-danger-2 px-3 py-2 text-sm text-danger-11">
+          {error}
+        </p>
+      )}
 
-      <section className="rounded-lg border border-neutral-200 bg-white p-4">
-        <h2 className="mb-3 text-sm font-medium text-neutral-600">添加 Server</h2>
-        <div className="mb-3 flex gap-1">
-          {(['stdio', 'http'] as const).map((option) => (
-            <button
-              key={option}
-              type="button"
-              onClick={() => setTransport(option)}
-              className={`rounded px-3 py-1 text-sm ${transport === option ? 'bg-neutral-900 text-white' : 'border border-neutral-300 text-neutral-600 hover:bg-neutral-50'}`}
-            >
-              {option === 'stdio' ? 'stdio（本地进程）' : 'Streamable HTTP（远程）'}
-            </button>
-          ))}
+      <section className="rounded-lg border border-border-soft bg-card p-4">
+        <h2 className="mb-3 text-sm font-medium text-foreground">添加 Server</h2>
+        <div className="mb-3">
+          <div className="inline-flex rounded-md bg-muted-strong p-0.5">
+            {(['stdio', 'http'] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                onClick={() => setTransport(option)}
+                className={`rounded-[5px] px-3 py-1 text-sm transition-colors ${
+                  transport === option
+                    ? 'bg-card font-medium text-foreground shadow-xs'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {option === 'stdio' ? 'stdio（本地进程）' : 'Streamable HTTP（远程）'}
+              </button>
+            ))}
+          </div>
         </div>
         {transport === 'stdio' ? (
           <div>
-            <div className="grid grid-cols-[1fr_1fr_2fr_auto] gap-2">
+            <div className="grid grid-cols-[1fr_1fr_2fr_auto] items-center gap-2">
               <input
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 placeholder="名称 (search)"
-                className="rounded border border-neutral-300 px-2 py-1.5 text-sm"
+                className="h-8 rounded-md border border-input bg-card px-2.5 text-sm"
               />
               <input
                 value={command}
                 onChange={(event) => setCommand(event.target.value)}
                 placeholder="命令 (node)"
-                className="rounded border border-neutral-300 px-2 py-1.5 text-sm"
+                className="h-8 rounded-md border border-input bg-card px-2.5 text-sm"
               />
               <input
                 value={args}
                 onChange={(event) => setArgs(event.target.value)}
                 placeholder="Server 脚本的绝对路径（空格分隔多个参数）"
-                className="rounded border border-neutral-300 px-2 py-1.5 text-sm"
+                className="h-8 rounded-md border border-input bg-card px-2.5 text-sm"
               />
               <Button variant="primary" disabled={busy || name.trim().length === 0 || command.trim().length === 0} onClick={() => void handleCreate()}>
                 {busy ? '连接中…' : '添加并连接'}
               </Button>
             </div>
-            <p className="mt-2 text-xs leading-relaxed text-neutral-400">
+            <p className="mt-2 text-xs leading-relaxed text-faint">
               参数必须是<b>绝对路径</b>（stdio 子进程按 server 进程的工作目录解析相对路径）。项目自带的 demo Server 位于仓库根目录下
-              <code className="mx-1 rounded bg-neutral-100 px-1">servers/search</code>
-              <code className="mx-1 rounded bg-neutral-100 px-1">servers/sandbox</code>
-              <code className="mx-1 rounded bg-neutral-100 px-1">servers/report</code>
-              ，构建后取各自的 <code className="rounded bg-neutral-100 px-1">dist/index.js</code>
+              <code className="mx-1 rounded bg-muted px-1 py-0.5 font-mono text-2xs text-sand-11">servers/search</code>
+              <code className="mx-1 rounded bg-muted px-1 py-0.5 font-mono text-2xs text-sand-11">servers/sandbox</code>
+              <code className="mx-1 rounded bg-muted px-1 py-0.5 font-mono text-2xs text-sand-11">servers/report</code>
+              ，构建后取各自的 <code className="rounded bg-muted px-1 py-0.5 font-mono text-2xs text-sand-11">dist/index.js</code>
               ，前面拼上你本仓库的绝对路径即可。示例（复制后把 {'<仓库绝对路径>'} 替换成实际路径）：
               <CopyButton
                 text="node <仓库绝对路径>/servers/search/dist/index.js"
@@ -215,18 +227,18 @@ export function McpServersPage() {
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-[1fr_2fr_auto] gap-2">
+          <div className="grid grid-cols-[1fr_2fr_auto] items-center gap-2">
             <input
               value={name}
               onChange={(event) => setName(event.target.value)}
               placeholder="名称 (remote-search)"
-              className="rounded border border-neutral-300 px-2 py-1.5 text-sm"
+              className="h-8 rounded-md border border-input bg-card px-2.5 text-sm"
             />
             <input
               value={url}
               onChange={(event) => setUrl(event.target.value)}
               placeholder="MCP 端点 (http://localhost:3100/mcp)"
-              className="rounded border border-neutral-300 px-2 py-1.5 text-sm"
+              className="h-8 rounded-md border border-input bg-card px-2.5 text-sm"
             />
             <Button variant="primary" disabled={busy || name.trim().length === 0 || url.trim().length === 0} onClick={() => void handleCreate()}>
               {busy ? '连接中…' : '添加并连接'}
@@ -250,28 +262,29 @@ export function McpServersPage() {
           />
         )}
         {servers.map((server) => (
-          <article key={server.id} className="rounded-lg border border-neutral-200 bg-white p-4">
+          <article key={server.id} className="rounded-lg border border-border-soft bg-card p-4">
             <header className="flex items-center gap-3">
-              <span className="font-mono text-sm font-semibold">{server.name}</span>
-              <span
-                className={`rounded-full px-2 py-0.5 text-xs ${STATUS_STYLES[server.status] ?? STATUS_STYLES.disconnected}`}
-              >
-                {STATUS_LABELS[server.status] ?? server.status}
-              </span>
-              <span className="text-xs text-neutral-400">
+              <span className="font-mono text-sm font-medium">{server.name}</span>
+              <StatusBadge
+                label={STATUS_LABELS[server.status] ?? server.status}
+                tone={STATUS_TONES[server.status] ?? 'neutral'}
+              />
+              <span className="text-xs text-faint">
                 {server.transport} · {server.toolCount} 工具
               </span>
               <span className="ml-auto flex gap-2">
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
+                  size="sm"
                   disabled={busy}
                   onClick={() => void handleAction(() => mcpApi.reconnectServer(server.id))}
-                  className="rounded border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50"
                 >
+                  <RefreshIcon />
                   重连
-                </button>
-                <button
-                  type="button"
+                </Button>
+                <Button
+                  variant="danger"
+                  size="sm"
                   disabled={busy}
                   onClick={() => {
                     if (
@@ -282,10 +295,9 @@ export function McpServersPage() {
                       void handleAction(() => mcpApi.removeServer(server.id));
                     }
                   }}
-                  className="rounded border border-red-200 px-2 py-1 text-xs text-red-600 hover:bg-red-50"
                 >
                   删除
-                </button>
+                </Button>
               </span>
             </header>
             {server.statusMessage && (
@@ -300,13 +312,13 @@ export function McpServersPage() {
                       return next;
                     })
                   }
-                  className={`text-left text-xs text-red-500 ${expandedErrors.has(server.id) ? '' : 'truncate block max-w-full'}`}
+                  className={`text-left text-xs text-danger-11 ${expandedErrors.has(server.id) ? '' : 'truncate block max-w-full'}`}
                 >
                   {expandedErrors.has(server.id)
                     ? server.statusMessage
                     : server.statusMessage.slice(0, 120)}
                   {(server.statusMessage.length > 120 || expandedErrors.has(server.id)) && (
-                    <span className="ml-1 text-neutral-400">
+                    <span className="ml-1 text-faint">
                       {expandedErrors.has(server.id) ? '[收起]' : '…[展开]'}
                     </span>
                   )}
@@ -316,21 +328,22 @@ export function McpServersPage() {
             <ul className="mt-3 space-y-1">
               {(toolsByServer.get(server.id) ?? []).map((tool) => (
                 <li key={tool.qualifiedName} className="flex items-center gap-2 text-sm">
-                  <code className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs">
+                  <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-2xs text-sand-11">
                     {tool.qualifiedName}
                   </code>
-                  <span className="truncate text-xs text-neutral-500">{tool.description}</span>
-                  <button
-                    type="button"
+                  <span className="truncate text-xs text-muted-foreground">{tool.description}</span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="ml-auto shrink-0"
                     onClick={() => {
                       setInvokeTarget(tool);
                       setInvokeArgs('{}');
                       setInvokeResult(null);
                     }}
-                    className="ml-auto shrink-0 rounded border border-neutral-300 px-2 py-0.5 text-xs hover:bg-neutral-50"
                   >
                     调用
-                  </button>
+                  </Button>
                 </li>
               ))}
             </ul>
@@ -343,11 +356,11 @@ export function McpServersPage() {
           {(() => {
             const hint = describeInputSchema(invokeTarget.inputSchema);
             return hint ? (
-              <pre className="mb-2 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-neutral-50 p-2 text-xs text-neutral-600">
+              <pre className="mb-2 max-h-32 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-2.5 text-xs text-muted-foreground">
                 {`参数说明（* 为必填）：\n${hint}`}
               </pre>
             ) : (
-              <p className="mb-2 text-xs text-neutral-400">该工具未提供参数说明，请参考其文档填写 JSON 对象。</p>
+              <p className="mb-2 text-xs text-faint">该工具未提供参数说明，请参考其文档填写 JSON 对象。</p>
             );
           })()}
           <textarea
@@ -355,10 +368,10 @@ export function McpServersPage() {
             onChange={(event) => setInvokeArgs(event.target.value)}
             rows={4}
             placeholder='{ "query": "durable execution" }'
-            className="w-full rounded border border-neutral-300 p-2 font-mono text-xs focus:border-neutral-500 focus:outline-none"
+            className="min-h-8 w-full rounded-md border border-input bg-card px-2.5 py-1.5 font-mono text-sm"
           />
           {invokeError && (
-            <p className="mt-2 rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-600">
+            <p className="mt-2 rounded-md border border-danger-6 bg-danger-2 px-2.5 py-1.5 text-xs text-danger-11">
               {invokeError}
             </p>
           )}
@@ -374,7 +387,7 @@ export function McpServersPage() {
             </Button>
           </div>
           {invokeResult && (
-            <pre className="mt-3 max-h-60 overflow-auto rounded bg-neutral-50 p-2 text-xs">
+            <pre className="mt-3 max-h-60 overflow-auto rounded-md border border-border-soft bg-muted p-2.5 font-mono text-2xs leading-relaxed">
               {invokeResult}
             </pre>
           )}

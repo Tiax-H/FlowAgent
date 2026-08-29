@@ -12,8 +12,8 @@ export function NodePalette({
   onAdd: (type: NodeType, position: { x: number; y: number }) => void;
 }) {
   return (
-    <aside className="flex w-44 shrink-0 flex-col gap-2 overflow-auto border-r border-neutral-200 bg-white p-3">
-      <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">节点</h2>
+    <aside className="flex w-48 shrink-0 flex-col gap-2 overflow-auto border-r border-border bg-background p-3">
+      <h2 className="text-xs font-medium text-muted-foreground">节点</h2>
       {PALETTE_NODE_TYPES.map((type) => {
         const meta = NODE_TYPE_META[type];
         return (
@@ -28,20 +28,18 @@ export function NodePalette({
             onClick={() =>
               onAdd(type, { x: 240 + Math.random() * 120, y: 80 + Math.random() * 200 })
             }
-            className="group cursor-grab rounded-lg border border-neutral-200 bg-white p-2 text-left transition-colors hover:border-neutral-400 active:cursor-grabbing"
+            className="group cursor-grab rounded-lg border border-border-soft bg-card p-2.5 text-left shadow-xs transition-[border-color,box-shadow] hover:border-border-strong hover:shadow-sm active:cursor-grabbing"
           >
-            <span
-              className={`inline-block rounded border px-1.5 py-0.5 text-[10px] font-semibold ${meta.color}`}
-            >
+            <span className={`inline-block rounded px-1.5 py-0.5 text-2xs font-semibold ${meta.color}`}>
               {meta.label}
             </span>
-            <p className="mt-1 text-[11px] leading-tight text-neutral-500 group-hover:text-neutral-700">
+            <p className="mt-1 text-2xs leading-tight text-muted-foreground group-hover:text-foreground">
               {meta.hint}
             </p>
           </button>
         );
       })}
-      <p className="mt-auto text-[10px] leading-tight text-neutral-400">
+      <p className="mt-auto text-2xs leading-tight text-faint">
         拖拽或点击添加节点；点选节点/连线后按 Delete 删除
       </p>
     </aside>

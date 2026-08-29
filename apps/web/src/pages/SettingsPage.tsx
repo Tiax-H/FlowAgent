@@ -27,9 +27,9 @@ type LoadState =
 /** 零配置时的琥珀色引导卡：分步说明 + 可复制 .env 模板 */
 function ZeroConfigGuide() {
   return (
-    <div className="rounded-lg border border-amber-300 bg-amber-50 p-4">
-      <h3 className="text-sm font-semibold text-amber-800">尚未配置任何 LLM Provider</h3>
-      <ol className="mt-2 space-y-1.5 text-sm leading-relaxed text-amber-900">
+    <div className="rounded-lg border border-warning-6 bg-warning-2 p-4">
+      <h3 className="text-sm font-semibold text-warning-12">尚未配置任何 LLM Provider</h3>
+      <ol className="mt-2 space-y-1.5 text-sm leading-relaxed text-warning-12">
         <li>
           ① 在仓库根目录创建/编辑 <code className="font-mono">.env</code>（参考{' '}
           <code className="font-mono">.env.example</code>）
@@ -43,15 +43,15 @@ function ZeroConfigGuide() {
           后回到本页查看是否出现 Provider 卡片
         </li>
       </ol>
-      <div className="relative mt-3 overflow-hidden rounded-lg border border-amber-200 bg-white">
+      <div className="relative mt-3 overflow-hidden rounded-lg border border-border-soft bg-card">
         <div className="absolute right-2 top-2 z-10">
           <CopyButton text={ENV_TEMPLATE} label="复制模板" />
         </div>
-        <pre className="overflow-x-auto p-3 pr-24 font-mono text-xs leading-relaxed text-neutral-700">
+        <pre className="overflow-x-auto p-3 pr-24 font-mono text-xs leading-relaxed text-foreground">
           {ENV_TEMPLATE}
         </pre>
       </div>
-      <p className="mt-2 text-xs leading-relaxed text-amber-700">
+      <p className="mt-2 text-xs leading-relaxed text-warning-11">
         提示：支持 DeepSeek、Qwen、OpenRouter、OpenCode Zen 等任何 OpenAI 兼容端点。
       </p>
     </div>
@@ -96,13 +96,13 @@ function ProviderCard({ provider }: { provider: ProviderInfo }) {
   }
 
   return (
-    <article className="rounded-lg border border-neutral-200 bg-white p-4">
+    <article className="rounded-lg border border-border-soft bg-card p-4">
       <header className="flex items-center gap-3">
-        <span className="rounded bg-neutral-100 px-2 py-0.5 font-mono text-sm font-semibold text-neutral-800">
+        <span className="rounded-md bg-muted-strong px-2 py-0.5 font-mono text-sm font-medium text-sand-12">
           {provider.name}
         </span>
-        <span className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-xs text-neutral-500">
-          <span className="h-2 w-2 rounded-full bg-neutral-300" aria-hidden />
+        <span className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="h-1.5 w-1.5 rounded-full bg-success-9" aria-hidden />
           已加载
         </span>
       </header>
@@ -111,7 +111,7 @@ function ProviderCard({ provider }: { provider: ProviderInfo }) {
           {provider.models.map((item) => (
             <li
               key={item}
-              className="rounded-full border border-neutral-200 bg-neutral-50 px-2 py-0.5 font-mono text-xs text-neutral-600"
+              className="rounded-full border border-border-soft bg-muted px-2 py-0.5 font-mono text-2xs text-sand-11"
             >
               {item}
             </li>
@@ -119,14 +119,14 @@ function ProviderCard({ provider }: { provider: ProviderInfo }) {
         </ul>
       )}
       {/* 测试连接：只测当前选中的模型，结果即时反馈 */}
-      <div className="mt-3 rounded border border-neutral-200 bg-neutral-50 p-2">
+      <div className="mt-3 rounded-lg border border-border-soft bg-muted p-2.5">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-neutral-500">测试连接</span>
+          <span className="text-xs text-muted-foreground">测试连接</span>
           {provider.models.length > 0 ? (
             <select
               value={model}
               onChange={(event) => setModel(event.target.value)}
-              className="rounded border border-neutral-300 bg-white px-1.5 py-0.5 font-mono text-xs focus:border-neutral-500 focus:outline-none"
+              className="h-7 rounded-md border border-input bg-card px-2 font-mono text-xs"
             >
               {provider.models.map((item) => (
                 <option key={item} value={item}>
@@ -139,38 +139,38 @@ function ProviderCard({ provider }: { provider: ProviderInfo }) {
               value={manualModel}
               onChange={(event) => setManualModel(event.target.value)}
               placeholder="模型名（如 gpt-4o-mini）"
-              className="w-48 rounded border border-neutral-300 bg-white px-1.5 py-0.5 font-mono text-xs focus:border-neutral-500 focus:outline-none"
+              className="h-7 w-48 rounded-md border border-input bg-card px-2 font-mono text-xs"
             />
           )}
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="sm"
             disabled={test.phase === 'testing'}
             onClick={() => void handleTest()}
-            className="shrink-0 rounded border border-neutral-300 bg-white px-2 py-0.5 text-xs text-neutral-700 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {test.phase === 'testing' ? '测试中…' : '测试连接'}
-          </button>
+          </Button>
           {test.phase === 'testing' && (
-            <span className="inline-flex items-center gap-1.5 text-xs text-neutral-500">
+            <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
               <span
-                className="h-2.5 w-2.5 animate-spin rounded-full border border-neutral-300 border-t-neutral-600"
+                className="h-2.5 w-2.5 animate-spin rounded-full border border-sand-6 border-t-sand-9"
                 aria-hidden
               />
               正在请求模型端点…
             </span>
           )}
           {test.phase === 'ok' && (
-            <span className="inline-flex items-center gap-1.5 text-xs text-emerald-600">
-              <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden />
+            <span className="inline-flex items-center gap-1.5 text-xs text-success-11">
+              <span className="h-2 w-2 rounded-full bg-success-9" aria-hidden />
               连接正常{test.latencyMs != null ? ` · ${test.latencyMs}ms` : ''}
             </span>
           )}
           {test.phase === 'fail' && (
             <span
-              className="inline-flex min-w-0 items-center gap-1.5 text-xs text-red-600"
+              className="inline-flex min-w-0 items-center gap-1.5 text-xs text-danger-11"
               title={test.message}
             >
-              <span className="h-2 w-2 shrink-0 rounded-full bg-red-500" aria-hidden />
+              <span className="h-2 w-2 shrink-0 rounded-full bg-danger-9" aria-hidden />
               <span className="min-w-0 truncate">{test.message}</span>
             </span>
           )}
@@ -209,18 +209,18 @@ export function SettingsPage({ onGoMcp, onGoWorkflows }: SettingsPageProps) {
     <div className="mx-auto max-w-3xl space-y-6 p-6">
       <header>
         <h1 className="text-lg font-semibold">设置</h1>
-        <p className="mt-1 text-sm text-neutral-500">
+        <p className="mt-1 text-sm text-muted-foreground">
           LLM Provider 通过环境变量配置，修改后需重启 server 生效
         </p>
       </header>
 
       <section className="space-y-3">
-        <h2 className="text-sm font-medium text-neutral-600">已配置的 LLM Provider</h2>
+        <h2 className="text-sm font-medium text-foreground">已配置的 LLM Provider</h2>
         {state.phase === 'loading' && <LoadingRows rows={2} />}
         {state.phase === 'error' && (
-          <div className="flex items-center justify-between gap-3 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+          <div className="flex items-center justify-between gap-3 rounded-md border border-warning-6 bg-warning-3 px-3 py-2 text-sm text-warning-12">
             <span>{state.message}</span>
-            <Button variant="secondary" onClick={() => void refresh()}>
+            <Button variant="secondary" size="sm" onClick={() => void refresh()}>
               重试
             </Button>
           </div>
@@ -232,20 +232,20 @@ export function SettingsPage({ onGoMcp, onGoWorkflows }: SettingsPageProps) {
           ))}
       </section>
 
-      <section className="rounded-lg border border-neutral-200 bg-neutral-50 p-4">
-        <h2 className="text-sm font-medium text-neutral-600">安全说明</h2>
-        <p className="mt-1.5 text-xs leading-relaxed text-neutral-500">
+      <section className="rounded-lg border border-border-soft bg-muted p-4">
+        <h2 className="text-sm font-medium text-foreground">安全说明</h2>
+        <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
           API key 只保存在服务端环境变量中，不会写入数据库、日志或事件流，也绝不会通过本页接口返回；请勿把
           .env 文件提交到仓库。
         </p>
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-sm font-medium text-neutral-600">下一步</h2>
+        <h2 className="text-sm font-medium text-foreground">下一步</h2>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <article className="flex flex-col rounded-lg border border-neutral-200 bg-white p-4">
-            <h3 className="text-sm font-semibold text-neutral-800">① 注册 MCP Server</h3>
-            <p className="mt-1 flex-1 text-xs leading-relaxed text-neutral-500">
+          <article className="flex flex-col rounded-lg border border-border-soft bg-card p-4 shadow-xs">
+            <h3 className="text-sm font-semibold text-foreground">① 注册 MCP Server</h3>
+            <p className="mt-1 flex-1 text-xs leading-relaxed text-muted-foreground">
               让工作流能调用工具。
             </p>
             {onGoMcp && (
@@ -256,9 +256,9 @@ export function SettingsPage({ onGoMcp, onGoWorkflows }: SettingsPageProps) {
               </div>
             )}
           </article>
-          <article className="flex flex-col rounded-lg border border-neutral-200 bg-white p-4">
-            <h3 className="text-sm font-semibold text-neutral-800">② 新建工作流</h3>
-            <p className="mt-1 flex-1 text-xs leading-relaxed text-neutral-500">
+          <article className="flex flex-col rounded-lg border border-border-soft bg-card p-4 shadow-xs">
+            <h3 className="text-sm font-semibold text-foreground">② 新建工作流</h3>
+            <p className="mt-1 flex-1 text-xs leading-relaxed text-muted-foreground">
               编排节点并运行。
             </p>
             {onGoWorkflows && (

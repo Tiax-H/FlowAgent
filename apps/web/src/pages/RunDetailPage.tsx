@@ -5,6 +5,13 @@ import { runsApi, HttpError } from '../api/runs';
 import { foldReplayState } from '../runs/fold';
 import { eventLabel } from '../lib/eventLabels';
 import { formatEventTime, shortenText } from '../lib/format';
+import {
+  ArrowLeftIcon,
+  ChevronDownIcon,
+  PauseIcon,
+  PlayIcon,
+  UndoIcon,
+} from '../components/icons';
 import { WORKFLOW_DELETED_NAME_FALLBACK, type FailurePayloadExtras, type RunSummaryWithFlags } from '../types';
 import {
   Button,
@@ -27,26 +34,26 @@ const DEFAULT_EXPANDED_EVENT_TYPES = new Set<string>(['HUMAN_WAITING']);
 /** 输入/输出面板超过多少行时默认限高滚动 */
 const IO_COLLAPSED_LINES = 8;
 
-const EVENT_TYPE_COLORS: Record<string, string> = {
-  RUN_STARTED: 'text-blue-600',
-  RUN_COMPLETED: 'text-green-600',
-  RUN_FAILED: 'text-red-600',
-  RUN_SUSPENDED: 'text-yellow-600',
-  RUN_RESUMED: 'text-blue-600',
-  RUN_CANCELED: 'text-neutral-500',
-  NODE_STARTED: 'text-blue-500',
-  NODE_SUCCEEDED: 'text-green-500',
-  NODE_FAILED: 'text-red-500',
-  NODE_SKIPPED: 'text-neutral-400',
-  NODE_RETRYING: 'text-orange-500',
-  LLM_REQUESTED: 'text-violet-500',
-  LLM_TOKEN: 'text-violet-400',
-  LLM_COMPLETED: 'text-violet-600',
-  TOOL_CALLED: 'text-amber-600',
-  TOOL_RESULT: 'text-amber-500',
-  HUMAN_WAITING: 'text-pink-600',
-  HUMAN_INPUT_RECEIVED: 'text-pink-500',
-  CHECKPOINT_SAVED: 'text-teal-500',
+/** 时间轴状态圆点：活动=品牌蓝、成功=绿、失败=红、挂起重试=琥珀、中性=灰（未收录类型按中性） */
+const EVENT_DOT_COLORS: Record<string, string> = {
+  RUN_STARTED: 'bg-brand-9',
+  RUN_RESUMED: 'bg-brand-9',
+  NODE_STARTED: 'bg-brand-9',
+  LLM_REQUESTED: 'bg-brand-9',
+  LLM_COMPLETED: 'bg-brand-9',
+  TOOL_CALLED: 'bg-brand-9',
+  RUN_COMPLETED: 'bg-success-9',
+  NODE_SUCCEEDED: 'bg-success-9',
+  RUN_FAILED: 'bg-danger-9',
+  NODE_FAILED: 'bg-danger-9',
+  RUN_SUSPENDED: 'bg-warning-9',
+  NODE_RETRYING: 'bg-warning-9',
+  HUMAN_WAITING: 'bg-warning-9',
+  HUMAN_INPUT_RECEIVED: 'bg-warning-9',
+  CHECKPOINT_SAVED: 'bg-sand-8',
+  NODE_SKIPPED: 'bg-sand-8',
+  RUN_CANCELED: 'bg-sand-8',
+  LLM_TOKEN: 'bg-sand-8',
 };
 
 const TERMINAL_STATUSES = ['completed', 'failed', 'canceled'];
@@ -110,11 +117,11 @@ function FailedEventBlock({ event }: { event: WorkflowEvent }) {
   const payload = asFailurePayload(event);
   if (!payload.errorHint && !payload.error && !payload.upstreamExcerpt) return null;
   return (
-    <div className="mx-3 mb-2 space-y-1">
+    <div className="mx-3 mb-2 space-y-1 rounded-md border border-danger-6 bg-danger-2 p-2">
       {payload.errorHint && (
-        <p className="rounded bg-red-50 px-2 py-1 text-xs leading-relaxed text-red-600">
+        <p className="text-xs leading-relaxed text-danger-11">
           {payload.errorCategory && (
-            <span className="mr-1.5 rounded bg-red-100 px-1 py-0.5 text-[10px] text-red-500">
+            <span className="mr-1.5 rounded bg-card px-1 py-0.5 font-mono text-2xs text-danger-11">
               {payload.errorCategory}
             </span>
           )}
@@ -122,24 +129,24 @@ function FailedEventBlock({ event }: { event: WorkflowEvent }) {
         </p>
       )}
       {!payload.errorHint && payload.error && (
-        <p className="truncate rounded bg-red-50 px-2 py-1 text-xs text-red-600" title={payload.error}>
+        <p className="truncate text-xs text-danger-11" title={payload.error}>
           {shortenText(payload.error, 120)}
         </p>
       )}
       {(payload.error || payload.upstreamExcerpt) && (
-        <details className="rounded bg-neutral-50 px-2 py-1">
-          <summary className="cursor-pointer select-none text-[10px] text-neutral-400">
+        <details className="rounded-md bg-muted px-2 py-1">
+          <summary className="cursor-pointer select-none text-2xs text-muted-foreground">
             查看原始报错
           </summary>
           {payload.error && (
-            <pre className="mt-1 whitespace-pre-wrap break-all font-mono text-[10px] leading-relaxed text-neutral-500">
+            <pre className="mt-1 whitespace-pre-wrap break-all font-mono text-2xs leading-relaxed text-muted-foreground">
               {payload.error}
             </pre>
           )}
           {payload.upstreamExcerpt && (
             <div className="mt-1">
-              <p className="text-[10px] text-neutral-400">上游输出摘录：</p>
-              <pre className="whitespace-pre-wrap break-all font-mono text-[10px] leading-relaxed text-neutral-500">
+              <p className="text-2xs text-muted-foreground">上游输出摘录：</p>
+              <pre className="whitespace-pre-wrap break-all font-mono text-2xs leading-relaxed text-muted-foreground">
                 {payload.upstreamExcerpt}
               </pre>
             </div>
@@ -168,14 +175,14 @@ function IoPanel({ title, text }: { title: string; text: string }) {
   return (
     <div>
       <div className="mb-1 flex items-center gap-1">
-        <h2 className="min-w-0 flex-1 truncate text-xs font-semibold uppercase tracking-wide text-neutral-400">
+        <h2 className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">
           {title}
         </h2>
         {collapsible && (
           <button
             type="button"
             onClick={() => setExpanded((value) => !value)}
-            className="shrink-0 rounded border border-neutral-200 bg-white px-1.5 py-0.5 text-xs text-neutral-500 transition-colors hover:border-neutral-400 hover:text-neutral-700"
+            className="shrink-0 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted-strong hover:text-foreground"
           >
             {expanded ? '收起' : '展开全部'}
           </button>
@@ -183,7 +190,7 @@ function IoPanel({ title, text }: { title: string; text: string }) {
         <CopyButton text={text} />
       </div>
       <pre
-        className={`whitespace-pre-wrap break-all rounded bg-neutral-50 p-2 text-[10px] leading-relaxed ${
+        className={`whitespace-pre-wrap break-all rounded-md border border-border-soft bg-muted p-2.5 font-mono text-2xs leading-relaxed ${
           collapsible && !expanded ? 'max-h-40 overflow-auto' : ''
         }`}
       >
@@ -446,15 +453,12 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
   if (notFound) {
     return (
       <div className="flex h-full flex-col">
-        <header className="flex items-center gap-3 border-b border-neutral-200 bg-white px-4 py-2">
-          <button
-            type="button"
-            onClick={onBack}
-            className="rounded px-2 py-1 text-sm text-neutral-600 hover:bg-neutral-100"
-          >
-            ← 返回
-          </button>
-          <h1 className="text-sm font-semibold text-neutral-400">{runId}</h1>
+        <header className="flex h-12 items-center gap-3 border-b border-border bg-card px-4">
+          <Button variant="ghost" size="sm" onClick={onBack}>
+            <ArrowLeftIcon />
+            返回
+          </Button>
+          <h1 className="text-sm font-semibold text-faint">{runId}</h1>
         </header>
         <div className="flex flex-1 items-center justify-center p-8">
           <EmptyState
@@ -473,17 +477,18 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center gap-3 border-b border-neutral-200 bg-white px-4 py-2">
-        <button
-          type="button"
-          onClick={onBack}
-          className="rounded px-2 py-1 text-sm text-neutral-600 hover:bg-neutral-100"
-        >
-          ← 返回
-        </button>
+      <header className="flex h-12 items-center gap-3 border-b border-border bg-card px-4">
+        <Button variant="ghost" size="sm" onClick={onBack}>
+          <ArrowLeftIcon />
+          返回
+        </Button>
         <h1 className="text-sm font-semibold">{summary ? summary.workflowName : runId}</h1>
         {summary && <RunStatusBadge status={summary.status} />}
-        {summary && <span className="text-xs text-neutral-400">v{summary.workflowVersion}</span>}
+        {summary && (
+          <span className="rounded bg-muted-strong px-1 font-mono text-2xs text-muted-foreground">
+            v{summary.workflowVersion}
+          </span>
+        )}
 
         {/* 操作栏：failed 仍提供断点重试；其余非终态提供取消/暂停/恢复。
             pauseRequested/cancelRequested 为真时按钮禁用并提示等待生效 */}
@@ -506,13 +511,18 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
               </Button>
             )}
             {summary.status === 'failed' && (
-              <Button variant="accent" disabled={busy} onClick={() => runAction(() => runsApi.retry(runId))}>
+              <Button
+                variant="accent"
+                disabled={busy}
+                onClick={() => runAction(() => runsApi.retry(runId))}
+              >
+                <UndoIcon />
                 从断点重试
               </Button>
             )}
             {summary.status !== 'failed' && (
               <Button
-                variant="dangerOutline"
+                variant="danger"
                 disabled={busy || cancelRequested}
                 title={cancelRequested ? '取消请求已提交，等待生效' : undefined}
                 // 琥珀横幅已覆盖反馈，不再弹绿色「已提交」，避免双重提示
@@ -524,28 +534,20 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
           </div>
         )}
         {isTerminal && summary.status !== 'failed' && (
-          <button
-            type="button"
-            onClick={replayToggle}
-            className="ml-auto rounded border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-600 hover:bg-neutral-100"
-          >
+          <Button variant="secondary" size="sm" className="ml-auto" onClick={replayToggle}>
             {replayActive ? '退出回放' : '回放时间轴'}
-          </button>
+          </Button>
         )}
         {isTerminal && summary.status === 'failed' && (
-          <button
-            type="button"
-            onClick={replayToggle}
-            className="ml-2 rounded border border-neutral-300 bg-white px-2.5 py-1 text-xs text-neutral-600 hover:bg-neutral-100"
-          >
+          <Button variant="secondary" size="sm" className="ml-2" onClick={replayToggle}>
             {replayActive ? '退出回放' : '回放时间轴'}
-          </button>
+          </Button>
         )}
       </header>
 
       {/* 原工作流已删除：中性提示条，说明该运行基于历史定义快照 */}
       {workflowDeleted && (
-        <p className="border-b border-neutral-200 bg-neutral-100 px-4 py-2 text-xs text-neutral-600">
+        <p className="border-b border-border bg-muted px-4 py-2 text-xs text-muted-foreground">
           原工作流已删除，此运行基于历史定义快照
         </p>
       )}
@@ -555,7 +557,7 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
         <section className="border-b border-pink-100 bg-pink-50/60 px-4 py-3">
           <p className="text-sm font-medium text-pink-800">
             等待人工审批：{summary.waitingHuman.name}
-            <span className="ml-2 font-mono text-[10px] text-pink-400">
+            <span className="ml-2 font-mono text-2xs text-pink-400">
               {summary.waitingHuman.nodeId}
             </span>
           </p>
@@ -567,7 +569,7 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
             onChange={(changeEvent) => setHumanInputText(changeEvent.target.value)}
             placeholder="可填写审批意见或补充信息（纯文本或 JSON）"
             rows={2}
-            className="mt-2 w-full max-w-xl rounded border border-pink-200 bg-white px-2 py-1 text-xs"
+            className="mt-2 w-full max-w-xl rounded-md border border-pink-200 bg-card px-2.5 py-1.5 text-sm"
           />
           <div className="mt-2 flex gap-2">
             <Button variant="accent" disabled={busy} onClick={() => submitHuman(true)}>
@@ -580,9 +582,9 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
         </section>
       )}
 
-      {/* 详情加载失败：黄条 + 重试 */}
+      {/* 详情加载失败：警示横幅 + 重试 */}
       {error && !summary && !loading && (
-        <div className="flex items-center gap-3 bg-yellow-50 px-4 py-2 text-sm text-yellow-700">
+        <div className="flex items-center gap-3 border-b border-warning-6 bg-warning-3 px-4 py-2 text-sm text-warning-12">
           <span className="min-w-0 flex-1">{error}</span>
           <Button
             variant="secondary"
@@ -596,51 +598,54 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
         </div>
       )}
       {actionError && (
-        <p className="bg-red-50 px-4 py-2 text-sm text-red-600">操作失败：{actionError}</p>
+        <p className="border-b border-danger-6 bg-danger-2 px-4 py-2 text-sm text-danger-11">
+          操作失败：{actionError}
+        </p>
       )}
-      {actionNotice && <p className="bg-green-50 px-4 py-2 text-sm text-green-700">{actionNotice}</p>}
+      {actionNotice && (
+        <p className="border-b border-success-6 bg-success-2 px-4 py-2 text-sm text-success-11">
+          {actionNotice}
+        </p>
+      )}
       {pauseRequested && (
-        <p className="bg-amber-50 px-4 py-2 text-xs font-medium text-amber-800">
+        <p className="border-b border-warning-6 bg-warning-3 px-4 py-2 text-xs font-medium text-warning-12">
           暂停请求已提交，将在当前节点结束后生效，请稍候…
         </p>
       )}
       {cancelRequested && !pauseRequested && (
-        <p className="bg-amber-50 px-4 py-2 text-xs font-medium text-amber-800">
+        <p className="border-b border-warning-6 bg-warning-3 px-4 py-2 text-xs font-medium text-warning-12">
           取消请求已提交，将在当前节点结束后生效，请稍候…
         </p>
       )}
       {!streamConnected && !isTerminal && (
-        <p className="bg-yellow-50 px-4 py-2 text-xs text-yellow-700">
+        <p className="border-b border-warning-6 bg-warning-3 px-4 py-2 text-xs text-warning-12">
           实时连接已断开，正在自动重连（服务恢复后会从断点继续接收事件）…
         </p>
       )}
 
       {/* 回放控件 */}
       {replayActive && (
-        <div className="flex items-center gap-3 border-b border-neutral-200 bg-white px-4 py-2">
-          <button
-            type="button"
-            onClick={() => setPlaying((value) => !value)}
-            className="rounded border border-neutral-300 px-2 py-0.5 text-xs hover:bg-neutral-100"
-          >
-            {playing ? '⏸ 暂停' : '▶ 播放'}
-          </button>
-          <button
-            type="button"
+        <div className="flex items-center gap-3 border-b border-border bg-card px-4 py-2">
+          <Button variant="secondary" size="sm" onClick={() => setPlaying((value) => !value)}>
+            {playing ? <PauseIcon /> : <PlayIcon />}
+            {playing ? '暂停' : '播放'}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={() => setReplayCursor((cursor) => Math.max(0, (cursor ?? 0) - 1))}
-            className="rounded border border-neutral-300 px-2 py-0.5 text-xs hover:bg-neutral-100"
           >
-            |◀ 上一步
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              setReplayCursor((cursor) => Math.min(events.length, (cursor ?? 0) + 1))
-            }
-            className="rounded border border-neutral-300 px-2 py-0.5 text-xs hover:bg-neutral-100"
+            <ChevronDownIcon className="rotate-90" />
+            上一步
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setReplayCursor((cursor) => Math.min(events.length, (cursor ?? 0) + 1))}
           >
-            下一步 ▶|
-          </button>
+            下一步
+            <ChevronDownIcon className="-rotate-90" />
+          </Button>
           <input
             type="range"
             min={0}
@@ -650,9 +655,9 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
               setPlaying(false);
               setReplayCursor(Number(changeEvent.target.value));
             }}
-            className="min-w-0 flex-1"
+            className="min-w-0 flex-1 accent-accent"
           />
-          <span className="shrink-0 font-mono text-[10px] text-neutral-400">
+          <span className="shrink-0 font-mono text-2xs tabular-nums text-faint">
             {String(replayCursor ?? 0)}/{String(events.length)}
           </span>
         </div>
@@ -668,26 +673,26 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
       ) : (
         <div className="flex min-h-0 flex-1">
           {/* 节点状态看板（回放时随游标折叠） */}
-          <aside className="w-64 shrink-0 overflow-auto border-r border-neutral-200 bg-white p-3">
-            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">
+          <aside className="w-64 shrink-0 overflow-auto border-r border-border bg-card p-3">
+            <h2 className="mb-2 text-xs font-medium text-muted-foreground">
               节点看板{replayActive ? '（回放）' : ''}
             </h2>
             {boardNodes.length === 0 ? (
-              <p className="text-xs text-neutral-400">暂无节点状态</p>
+              <p className="text-xs text-faint">暂无节点状态</p>
             ) : (
               <ul className="space-y-1.5">
                 {boardNodes.map((node) => (
-                  <li key={node.nodeId} className="rounded border border-neutral-200 px-2 py-1.5">
+                  <li key={node.nodeId} className="rounded-lg border border-border-soft bg-card p-2.5">
                     <div className="flex items-center gap-2">
-                      <span className="truncate text-xs font-medium text-neutral-700">
+                      <span className="truncate text-xs font-medium text-foreground">
                         {node.name}
                       </span>
                       <span className="ml-auto">
                         <NodeStatusBadge status={node.status} />
                       </span>
                     </div>
-                    <code className="block truncate text-[10px] text-neutral-400">{node.nodeId}</code>
-                    {node.error && <p className="truncate text-[10px] text-red-500">{node.error}</p>}
+                    <code className="block truncate text-2xs text-faint">{node.nodeId}</code>
+                    {node.error && <p className="truncate text-2xs text-danger-11">{node.error}</p>}
                   </li>
                 ))}
               </ul>
@@ -698,9 +703,9 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
           <div
             ref={timelineRef}
             onScroll={handleTimelineScroll}
-            className="min-w-0 flex-1 overflow-auto bg-neutral-50 p-4"
+            className="min-w-0 flex-1 overflow-auto bg-background p-4"
           >
-            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">
+            <h2 className="mb-2 text-xs font-medium text-muted-foreground">
               事件时间轴（{events.length}
               {events.length > MAX_VISIBLE_EVENTS ? `，仅显示最近 ${MAX_VISIBLE_EVENTS} 条` : ''}）
             </h2>
@@ -712,7 +717,7 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
                 return (
                   <li
                     key={`${event.seq}-${String(event.id ?? '')}`}
-                    className={`overflow-hidden rounded bg-white text-xs shadow-sm transition-opacity ${dimmed ? 'opacity-30' : ''}`}
+                    className={`overflow-hidden rounded-md border border-border-soft bg-card shadow-xs transition-opacity ${dimmed ? 'opacity-30' : ''}`}
                   >
                     <button
                       type="button"
@@ -721,43 +726,45 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
                       onClick={() =>
                         setExpandedSeqs((prev) => ({ ...prev, [event.seq]: !expanded }))
                       }
-                      className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left transition-colors hover:bg-neutral-50"
+                      className="flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-muted"
                     >
-                      <span className="w-8 shrink-0 text-right font-mono text-[10px] text-neutral-300">
+                      <span className="w-10 shrink-0 text-right font-mono text-2xs tabular-nums text-faint">
                         {event.seq}
                       </span>
                       <span
-                        className={`w-28 shrink-0 font-semibold ${EVENT_TYPE_COLORS[event.type] ?? 'text-neutral-600'}`}
-                      >
+                        className={`h-1.5 w-1.5 shrink-0 rounded-full ${EVENT_DOT_COLORS[event.type] ?? 'bg-sand-8'}`}
+                        aria-hidden
+                      />
+                      <span className="w-24 shrink-0 truncate text-xs font-medium text-foreground">
                         {eventLabel(event.type)}
                       </span>
-                      <span className="min-w-0 flex-1 truncate text-neutral-600">
+                      <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
                         {summaryCacheRef.current.get(event.seq) ?? eventSummary(event)}
                       </span>
-                      <span className="shrink-0 font-mono text-[10px] text-neutral-300">
+                      <span className="shrink-0 font-mono text-2xs tabular-nums text-faint">
                         {formatEventTime(event.timestamp)}
                       </span>
-                      <span className="shrink-0 text-[10px] text-neutral-400">
-                        {expanded ? '▾ 收起' : '▸ 展开'}
-                      </span>
+                      <ChevronDownIcon
+                        className={`shrink-0 text-faint transition-transform ${expanded ? 'rotate-180' : ''}`}
+                      />
                     </button>
                     {(event.type === 'NODE_FAILED' || event.type === 'RUN_FAILED') && (
                       <FailedEventBlock event={event} />
                     )}
                     {expanded && (
-                      <pre className="mx-3 mb-2 max-h-60 overflow-auto whitespace-pre-wrap break-all rounded bg-neutral-50 p-2 font-mono text-[10px] leading-relaxed text-neutral-700">
+                      <pre className="mx-3 mb-2 max-h-60 overflow-auto whitespace-pre-wrap break-all rounded-md border border-border-soft bg-muted p-2.5 font-mono text-2xs leading-relaxed">
                         {payloadJsonCacheRef.current.get(event.seq) ?? stringifyPayload(event.payload)}
                       </pre>
                     )}
                   </li>
                 );
               })}
-              {events.length === 0 && <li className="text-xs text-neutral-400">等待事件…</li>}
+              {events.length === 0 && <li className="text-xs text-faint">等待事件…</li>}
             </ol>
           </div>
 
           {/* 输入输出 */}
-          <aside className="w-64 shrink-0 space-y-3 overflow-auto border-l border-neutral-200 bg-white p-3">
+          <aside className="w-64 shrink-0 space-y-3 overflow-auto border-l border-border bg-card p-3">
             <IoPanel title="输入" text={summary ? JSON.stringify(summary.input, null, 2) : '…'} />
             <IoPanel
               title="输出"
@@ -765,26 +772,24 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
             />
             {summary?.error && (
               <div>
-                <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-red-400">
-                  错误
-                </h2>
+                <h2 className="mb-1 text-xs font-medium text-danger-11">错误</h2>
                 {lastFailureHint ? (
-                  <p className="mb-1 rounded bg-red-50 p-2 text-xs leading-relaxed text-red-600">
+                  <p className="mb-1 rounded-md border border-danger-6 bg-danger-2 p-2 text-xs leading-relaxed text-danger-11">
                     {lastFailureHint}
                   </p>
                 ) : (
                   <p
-                    className="mb-1 truncate rounded bg-red-50 p-2 text-xs text-red-600"
+                    className="mb-1 truncate rounded-md border border-danger-6 bg-danger-2 p-2 text-xs text-danger-11"
                     title={summary.error}
                   >
                     {shortenText(summary.error, 120)}
                   </p>
                 )}
-                <details className="rounded bg-neutral-50 px-2 py-1">
-                  <summary className="cursor-pointer select-none text-[10px] text-neutral-400">
+                <details className="rounded-md bg-muted px-2 py-1">
+                  <summary className="cursor-pointer select-none text-2xs text-muted-foreground">
                     查看原始报错
                   </summary>
-                  <pre className="mt-1 max-h-60 overflow-auto whitespace-pre-wrap break-all rounded bg-red-50 p-2 font-mono text-[10px] leading-relaxed text-red-600">
+                  <pre className="mt-1 max-h-60 overflow-auto whitespace-pre-wrap break-all rounded-md font-mono text-2xs leading-relaxed text-danger-11">
                     {summary.error}
                   </pre>
                 </details>

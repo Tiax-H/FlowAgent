@@ -20,6 +20,13 @@ export function formatEventTime(timestamp: string | number, now: Date = new Date
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${clock}`;
 }
 
+/** 列表时间戳：MM-dd HH:mm（补零），替代 toLocaleString 的冗长展示 */
+export function formatListTime(timestamp: string | number): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return '—';
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 /** 运行耗时：毫秒 → 中文短句（如「850 毫秒」「3.2 秒」「2 分 5 秒」「1 小时 2 分 3 秒」） */
 export function formatDuration(milliseconds: number): string {
   if (!Number.isFinite(milliseconds) || milliseconds < 0) return '—';

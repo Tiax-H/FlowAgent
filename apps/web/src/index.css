@@ -1,45 +1,165 @@
 @import 'tailwindcss';
 
-/* 视觉基线：中文字体栈 + 等宽变量 + 全局滚动条 + 选区颜色（保持克制，不做大改） */
+/* ==========================================================================
+   FlowAgent 视觉设计规范 v1 —— 设计 token 唯一事实源
+   12 级色阶语义（Radix）：1-2 应用底 · 3-5 组件底 · 6-8 边框 · 9-10 实底 · 11-12 文字
+   组件只允许用语义类（bg-background / text-muted-foreground / border-border）
+   和色阶类（bg-sand-3 / text-brand-11 / border-danger-6）；
+   禁止 tailwind 原生 neutral 系、blue 系、red 系、green 系等裸色。
+   ========================================================================== */
 
-@theme {
-  --font-sans:
-    system-ui, -apple-system, 'Segoe UI', Roboto, 'PingFang SC', 'Hiragino Sans GB',
-    'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
-  --font-mono:
-    ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono',
-    'Courier New', monospace;
+/* ---------- 原始色阶 ---------- */
+:root {
+  /* 中性 · 微暖灰 sand */
+  --sand-1: #fbfbfa; --sand-2: #f5f4f1; --sand-3: #edebe6; --sand-4: #e4e1db;
+  --sand-5: #d9d6cf; --sand-6: #ccc8c0; --sand-7: #b3ada3; --sand-8: #99938a;
+  --sand-9: #7c766d; --sand-10: #68625a; --sand-11: #4c4741; --sand-12: #26241f;
+  /* 品牌 · 钴蓝 */
+  --brand-1: #f5f7fe; --brand-2: #ecf0fc; --brand-3: #dce3fa; --brand-4: #c3d0f5;
+  --brand-5: #a6b9ef; --brand-6: #859de7; --brand-7: #6681de; --brand-8: #4e6bda;
+  --brand-9: #3e63dd; --brand-10: #3557cc; --brand-11: #3452b8; --brand-12: #2b419c;
+  /* 成功 */
+  --success-2: #eef8f2; --success-3: #dcf1e4; --success-4: #c4e8cf; --success-5: #aadfc0;
+  --success-6: #9bd7b3; --success-7: #6cc692; --success-8: #40b373; --success-9: #1fa263;
+  --success-10: #199057; --success-11: #157a4b; --success-12: #0b452c;
+  /* 警示 */
+  --warning-2: #fdf6e8; --warning-3: #f9ecd2; --warning-4: #f5dfa9; --warning-5: #f0d07f;
+  --warning-6: #efc584; --warning-7: #e9ac55; --warning-8: #df9530; --warning-9: #d9830e;
+  --warning-10: #c2740a; --warning-11: #8f5b00; --warning-12: #6b4306;
+  /* 危险 */
+  --danger-2: #fef1f0; --danger-3: #fbe4e2; --danger-4: #f7cdc7; --danger-5: #f3b1a7;
+  --danger-6: #f2978d; --danger-7: #eb7467; --danger-8: #e35449; --danger-9: #dc3d43;
+  --danger-10: #cd2b31; --danger-11: #c0251d; --danger-12: #581a16;
+  /* info 复用 brand，不单设色相 */
 }
 
-html {
-  font-family: var(--font-sans);
+/* ---------- 语义 token ---------- */
+:root {
+  --background: var(--sand-1);
+  --foreground: var(--sand-12);
+  --card: #ffffff;
+  --muted: var(--sand-2);
+  --muted-strong: var(--sand-3);
+  --muted-foreground: var(--sand-10);
+  --faint: var(--sand-9);
+  --border: var(--sand-4);
+  --border-soft: var(--sand-3);
+  --border-strong: var(--sand-7);
+  --input: var(--sand-6);
+  --ring: var(--brand-9);
+  --primary: var(--sand-12);
+  --primary-foreground: #ffffff;
+  --accent: var(--brand-9);
+  --accent-hover: var(--brand-10);
+  --overlay: rgb(38 36 31 / 0.4);
+  color-scheme: light;
 }
 
-::selection {
-  background-color: #bfdbfe;
-  color: inherit;
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-muted: var(--muted);
+  --color-muted-strong: var(--muted-strong);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-faint: var(--faint);
+  --color-border: var(--border);
+  --color-border-soft: var(--border-soft);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-overlay: var(--overlay);
+
+  --color-sand-1: var(--sand-1);   --color-sand-2: var(--sand-2);   --color-sand-3: var(--sand-3);
+  --color-sand-4: var(--sand-4);   --color-sand-5: var(--sand-5);   --color-sand-6: var(--sand-6);
+  --color-sand-7: var(--sand-7);   --color-sand-8: var(--sand-8);   --color-sand-9: var(--sand-9);
+  --color-sand-10: var(--sand-10); --color-sand-11: var(--sand-11); --color-sand-12: var(--sand-12);
+
+  --color-brand-1: var(--brand-1);   --color-brand-2: var(--brand-2);   --color-brand-3: var(--brand-3);
+  --color-brand-4: var(--brand-4);   --color-brand-5: var(--brand-5);   --color-brand-6: var(--brand-6);
+  --color-brand-7: var(--brand-7);   --color-brand-8: var(--brand-8);   --color-brand-9: var(--brand-9);
+  --color-brand-10: var(--brand-10); --color-brand-11: var(--brand-11); --color-brand-12: var(--brand-12);
+
+  --color-success-2: var(--success-2); --color-success-3: var(--success-3); --color-success-6: var(--success-6);
+  --color-success-7: var(--success-7); --color-success-8: var(--success-8); --color-success-9: var(--success-9);
+  --color-success-10: var(--success-10); --color-success-11: var(--success-11); --color-success-12: var(--success-12);
+
+  --color-warning-2: var(--warning-2); --color-warning-3: var(--warning-3); --color-warning-6: var(--warning-6);
+  --color-warning-7: var(--warning-7); --color-warning-8: var(--warning-8); --color-warning-9: var(--warning-9);
+  --color-warning-10: var(--warning-10); --color-warning-11: var(--warning-11); --color-warning-12: var(--warning-12);
+
+  --color-danger-2: var(--danger-2); --color-danger-3: var(--danger-3); --color-danger-6: var(--danger-6);
+  --color-danger-7: var(--danger-7); --color-danger-8: var(--danger-8); --color-danger-9: var(--danger-9);
+  --color-danger-10: var(--danger-10); --color-danger-11: var(--danger-11); --color-danger-12: var(--danger-12);
+
+  --color-info-2: var(--brand-2); --color-info-3: var(--brand-3); --color-info-9: var(--brand-9);
+  --color-info-11: var(--brand-11);
+
+  --text-2xs: 11px;  --text-2xs--line-height: 1.45;
+  --text-xs: 12px;   --text-xs--line-height: 1.5;
+  --text-sm: 13px;   --text-sm--line-height: 1.55;
+  --text-base: 14px; --text-base--line-height: 1.6;
+  --text-lg: 16px;   --text-lg--line-height: 1.4;  --text-lg--font-weight: 600;
+  --text-xl: 20px;   --text-xl--line-height: 1.3;  --text-xl--font-weight: 600;
+
+  --radius-sm: 4px; --radius-md: 6px; --radius-lg: 8px; --radius-xl: 12px;
+
+  --shadow-xs: 0 1px 2px rgb(38 36 31 / 0.05);
+  --shadow-sm: 0 1px 2px rgb(38 36 31 / 0.06), 0 1px 1px rgb(38 36 31 / 0.04);
+  --shadow-md: 0 2px 4px -1px rgb(38 36 31 / 0.07), 0 6px 16px -4px rgb(38 36 31 / 0.10);
+  --shadow-lg: 0 4px 10px -2px rgb(38 36 31 / 0.08), 0 16px 40px -8px rgb(38 36 31 / 0.14);
+
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas,
+    'Liberation Mono', 'Courier New', monospace;
 }
 
-/* 细、中性色的全局滚动条（Firefox 走 scrollbar-*，WebKit 走伪元素） */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: #d4d4d4 transparent;
+@layer base {
+  html { font-family: var(--font-sans); }
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+  }
+  :focus-visible { outline: 2px solid var(--brand-8); outline-offset: 2px; }
+  input:focus-visible, textarea:focus-visible, select:focus-visible {
+    outline: none;
+    border-color: var(--brand-8);
+    box-shadow: 0 0 0 3px var(--brand-3);
+  }
+  ::placeholder { color: var(--faint); }
+  ::selection { background-color: var(--brand-3); color: inherit; }
+
+  * { scrollbar-width: thin; scrollbar-color: var(--sand-6) transparent; }
+  *::-webkit-scrollbar { width: 8px; height: 8px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  *::-webkit-scrollbar-thumb { background: var(--sand-6); border-radius: 4px; }
+  *::-webkit-scrollbar-thumb:hover { background: var(--sand-7); }
+
+  .font-mono, time, .tabular-nums { font-variant-numeric: tabular-nums; }
 }
 
-*::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+/* ---------- React Flow 画布部件对齐 ---------- */
+.react-flow__controls {
+  border: 1px solid var(--sand-5); border-radius: 8px; overflow: hidden;
+  box-shadow: var(--shadow-sm);
 }
-
-*::-webkit-scrollbar-track {
-  background: transparent;
+.react-flow__controls-button {
+  width: 28px; height: 28px; background: #fff;
+  border-bottom: 1px solid var(--sand-4); color: var(--sand-10);
 }
-
-*::-webkit-scrollbar-thumb {
-  background: #d4d4d4;
-  border-radius: 4px;
+.react-flow__controls-button:hover { background: var(--sand-2); }
+.react-flow__attribution { background: transparent; }
+.react-flow__attribution a { color: var(--sand-8); }
+.react-flow__edge.selected .react-flow__edge-path { stroke: var(--brand-9); stroke-width: 2; }
+.react-flow__handle {
+  width: 10px; height: 10px; background: #fff;
+  border: 2px solid var(--sand-7);
 }
-
-*::-webkit-scrollbar-thumb:hover {
-  background: #a3a3a3;
-}
+.react-flow__handle:hover { border-color: var(--brand-8); }
