@@ -24,6 +24,9 @@ interface InputField {
 
 const LONG_TEXT_HINT = /diff|code|text|content|prompt|script|body|json/i;
 
+/** 后端 JSON body 上限：运行输入超限时本地直接拦截，不发请求 */
+const MAX_INPUT_BYTES = 1024 * 1024;
+
 function parseHash(hash: string): Route {
   const segments = hash.replace(/^#/, '').split('/').filter(Boolean);
   switch (segments[0]) {
@@ -219,8 +222,11 @@ export function App() {
     if (creating) return;
     setCreating(true);
     try {
+      // 默认名带时间（MM-DD HH:mm），避免同一天多次新建全部重名
+      const now = new Date();
+      const pad = (value: number): string => String(value).padStart(2, '0');
       const created = await workflowsApi.create({
-        name: `工作流 ${new Date().toLocaleDateString('zh-CN')}`,
+        name: `工作流 ${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`,
         definition: {
           schemaVersion: 1,
           nodes: [
@@ -587,6 +593,11 @@ function RunInputDialog({
           input = JSON.parse(trimmed) as unknown;
         } catch (cause) {
           setInlineError(`不是合法的 JSON：${cause instanceof Error ? cause.message : String(cause)}`);
+          return;
+        }
+        // JSON 模式提交前预检体积：超过后端 1MB 上限直接拦截，不发请求
+        if (new TextEncoder().encode(JSON.stringify(input)).byteLength > MAX_INPUT_BYTES) {
+          setInlineError('输入内容超过 1MB 上限，请精简后重试');
           return;
         }
       }

@@ -6,6 +6,7 @@ import { PrismaService } from '../src/prisma/prisma.service';
 import { WorkflowService } from '../src/workflow/workflow.service';
 import {
   BadRequestException,
+  ConflictException,
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
@@ -34,6 +35,39 @@ type WorkflowUpdateData = {
   definition?: string;
   version?: { increment: number };
 };
+
+/** 运行记录（级联软删测试只关心 workflowId 与 hiddenAt） */
+interface WorkflowRunRow {
+  id: string;
+  workflowId: string;
+  hiddenAt: Date | null;
+}
+
+class InMemoryWorkflowRunModel {
+  readonly rows: WorkflowRunRow[];
+
+  constructor(rows: WorkflowRunRow[] = []) {
+    this.rows = rows;
+  }
+
+  /** 对齐 Prisma updateMany 语义：hiddenAt: null 过滤 = 仅命中未软删行 */
+  updateMany({
+    where,
+    data,
+  }: {
+    where: { workflowId: string; hiddenAt: Date | null };
+    data: { hiddenAt: Date };
+  }): Promise<{ count: number }> {
+    let count = 0;
+    for (const row of this.rows) {
+      if (row.workflowId === where.workflowId && row.hiddenAt === null) {
+        row.hiddenAt = data.hiddenAt;
+        count += 1;
+      }
+    }
+    return Promise.resolve({ count });
+  }
+}
 
 class InMemoryWorkflowModel {
   private rows = new Map<string, WorkflowRow>();
@@ -143,10 +177,21 @@ function cyclicDefinition(): WorkflowDefinition {
 describe('WorkflowService', () => {
   let service: WorkflowService;
   let model: InMemoryWorkflowModel;
+  let runModel: InMemoryWorkflowRunModel;
 
   beforeEach(async () => {
     model = new InMemoryWorkflowModel();
-    const prismaStub = { workflow: model } as unknown as PrismaService;
+    runModel = new InMemoryWorkflowRunModel();
+    const prismaStub = {
+      workflow: model,
+      workflowRun: runModel,
+      // 对齐 Prisma $transaction 数组形式：顺序执行各操作
+      $transaction: async (operations: unknown[]): Promise<unknown[]> => {
+        const results: unknown[] = [];
+        for (const operation of operations) results.push(await operation);
+        return results;
+      },
+    } as unknown as PrismaService;
     const moduleRef = await Test.createTestingModule({
       providers: [{ provide: PrismaService, useValue: prismaStub }, WorkflowService],
     }).compile();
@@ -274,5 +319,80 @@ describe('WorkflowService', () => {
     await service.remove(created.id);
     await expect(service.findOne(created.id)).rejects.toBeInstanceOf(NotFoundException);
     await expect(service.remove(created.id)).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('remove 级联软删该工作流全部运行（hiddenAt 打标），其他工作流的 run 与已删 run 不受影响', async () => {
+    const created = await service.create({ name: 'demo', definition: validDefinition() });
+    const hiddenAt = new Date(1);
+    runModel.rows.push(
+      { id: 'run_1', workflowId: created.id, hiddenAt: null },
+      { id: 'run_2', workflowId: created.id, hiddenAt: null },
+      { id: 'run_other', workflowId: 'wf_other', hiddenAt: null },
+      { id: 'run_hidden', workflowId: created.id, hiddenAt },
+    );
+
+    await service.remove(created.id);
+
+    expect(model.findUnique({ where: { id: created.id } })).toBeNull();
+    const hiddenAtOf = (id: string): Date | null =>
+      runModel.rows.find((row) => row.id === id)?.hiddenAt ?? null;
+    expect(hiddenAtOf('run_1')).not.toBeNull();
+    expect(hiddenAtOf('run_2')).not.toBeNull();
+    expect(hiddenAtOf('run_other')).toBeNull();
+    // 已软删的 run 保持原标记（updateMany 只命中 hiddenAt: null）
+    expect(hiddenAtOf('run_hidden')?.getTime()).toBe(1);
+  });
+
+  it('update 提供 matching expectedVersion 时正常保存', async () => {
+    const created = await service.create({ name: 'demo', definition: validDefinition() });
+    const updated = await service.update(created.id, { name: 'renamed', expectedVersion: 1 });
+    expect(updated.name).toBe('renamed');
+    expect(updated.version).toBe(1);
+  });
+
+  it('update expectedVersion 不等于当前版本 → 409，响应体含 currentVersion，且不落库', async () => {
+    const created = await service.create({ name: 'demo', definition: validDefinition() });
+    try {
+      await service.update(created.id, { name: 'other', expectedVersion: 99 });
+      expect.unreachable('应当抛出 ConflictException');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConflictException);
+      const response = (error as ConflictException).getResponse() as {
+        message: string;
+        currentVersion: number;
+      };
+      expect(response.message).toBe('工作流已被其他会话修改（当前版本 v1），请刷新后重试');
+      expect(response.currentVersion).toBe(1);
+    }
+    const row = model.findUnique({ where: { id: created.id } });
+    expect(row?.name).toBe('demo');
+  });
+
+  it('update 未提供 expectedVersion 保持旧行为（后写者胜，向后兼容）', async () => {
+    const created = await service.create({ name: 'demo', definition: validDefinition() });
+    const updated = await service.update(created.id, { name: 'last-write' });
+    expect(updated.name).toBe('last-write');
+  });
+
+  it('update expectedVersion 非整数（字符串/小数）→ 400', async () => {
+    const created = await service.create({ name: 'demo', definition: validDefinition() });
+    await expect(
+      service.update(created.id, { name: 'x', expectedVersion: '1' as unknown as number }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      service.update(created.id, { name: 'x', expectedVersion: 1.5 }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('definition 保存使 version 自增后，旧 expectedVersion 再次保存 → 409（currentVersion=2）', async () => {
+    const created = await service.create({ name: 'demo', definition: validDefinition() });
+    await service.update(created.id, { definition: validDefinition('v2'), expectedVersion: 1 });
+    try {
+      await service.update(created.id, { name: 'stale', expectedVersion: 1 });
+      expect.unreachable('应当抛出 ConflictException');
+    } catch (error) {
+      const response = (error as ConflictException).getResponse() as { currentVersion: number };
+      expect(response.currentVersion).toBe(2);
+    }
   });
 });

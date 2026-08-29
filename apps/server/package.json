@@ -5,7 +5,8 @@
   "license": "MIT",
   "scripts": {
     "dev": "nest start --watch",
-    "build": "prisma generate && nest build",
+    "build": "nest build",
+    "postinstall": "prisma generate",
     "test": "vitest run",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev"

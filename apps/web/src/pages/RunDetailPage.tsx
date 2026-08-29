@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { WorkflowEvent } from '@flowagent/shared';
 
 import { runsApi, HttpError } from '../api/runs';
 import { foldReplayState } from '../runs/fold';
 import { eventLabel } from '../lib/eventLabels';
 import { formatEventTime, shortenText } from '../lib/format';
-import type { FailurePayloadExtras, RunSummaryWithFlags } from '../types';
+import { WORKFLOW_DELETED_NAME_FALLBACK, type FailurePayloadExtras, type RunSummaryWithFlags } from '../types';
 import {
   Button,
   CopyButton,
@@ -17,6 +17,9 @@ import {
 
 /** 时间轴最多渲染最近多少条事件（超出提示总数，避免长 run 冻结 DOM） */
 const MAX_VISIBLE_EVENTS = 500;
+
+/** 自动滚动跟随阈值：滚动位置距底部小于该值（px）才跟随新事件，上翻历史不拽回 */
+const FOLLOW_BOTTOM_THRESHOLD = 80;
 
 /** 该事件默认展开完整 payload（人工审批上下文最常被查看；失败事件改走错误分层呈现） */
 const DEFAULT_EXPANDED_EVENT_TYPES = new Set<string>(['HUMAN_WAITING']);
@@ -211,6 +214,10 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
   const [expandedSeqs, setExpandedSeqs] = useState<Record<number, boolean>>({});
   const timelineRef = useRef<HTMLDivElement>(null);
   const eventsRef = useRef<WorkflowEvent[]>([]);
+  /** 已收到的事件 seq 集合：SSE 重连续传去重用（Set 查找 O(1)，替代全数组扫描） */
+  const seenSeqsRef = useRef<Set<number>>(new Set());
+  /** 用户是否位于时间轴底部附近（决定新事件是否自动滚动跟随） */
+  const followTimelineRef = useRef(true);
   /** 事件摘要缓存（按 seq）：大 payload 的 stringify 只在事件到达时做一次 */
   const summaryCacheRef = useRef<Map<number, string>>(new Map());
   /** 完整 payload JSON 缓存（按 seq），供展开区渲染 */
@@ -241,6 +248,7 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
     let disposed = false;
 
     eventsRef.current = [];
+    seenSeqsRef.current = new Set();
     summaryCacheRef.current = new Map();
     payloadJsonCacheRef.current = new Map();
     setEvents([]);
@@ -273,8 +281,9 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
       source.addEventListener('event', (message) => {
         if (disposed) return;
         const event = JSON.parse((message as MessageEvent).data) as WorkflowEvent;
-        // 按 seq 去重（重连后服务端续传可能短窗重复）
-        if (eventsRef.current.some((existing) => existing.seq === event.seq)) return;
+        // 按 seq 去重（重连后服务端续传可能短窗重复）：Set 已存 seq，O(1) 判重
+        if (seenSeqsRef.current.has(event.seq)) return;
+        seenSeqsRef.current.add(event.seq);
         eventsRef.current = [...eventsRef.current, event];
         summaryCacheRef.current.set(event.seq, eventSummary(event));
         payloadJsonCacheRef.current.set(event.seq, stringifyPayload(event.payload));
@@ -319,11 +328,21 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
     // summary 仅用于终态判断（onerror 静默），不作为重订触发器
   }, [runId, streamEpoch]);
 
-  // 自动滚动到底部（仅实时模式）
+  // 滚动位置追踪：仅当用户本就位于底部附近（距底 < 80px）时，新事件才自动滚动跟随；
+  // 上翻历史阅读时不拽回底部
+  const handleTimelineScroll = useCallback((): void => {
+    const element = timelineRef.current;
+    if (!element) return;
+    followTimelineRef.current =
+      element.scrollHeight - element.scrollTop - element.clientHeight < FOLLOW_BOTTOM_THRESHOLD;
+  }, []);
+
+  // 自动滚动到底部（仅实时模式且用户位于底部附近时跟随）
   useEffect(() => {
     if (replayActive) return;
     const element = timelineRef.current;
-    if (element) element.scrollTop = element.scrollHeight;
+    if (!element || !followTimelineRef.current) return;
+    element.scrollTop = element.scrollHeight;
   }, [events, replayActive]);
 
   // 回放播放：定时推进游标
@@ -337,14 +356,18 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
     return () => clearTimeout(timer);
   }, [playing, replayCursor, events.length]);
 
-  const runAction = (action: () => Promise<unknown>, onSuccess?: () => void): void => {
+  /** options.skipNotice：琥珀横幅已覆盖反馈的动作（暂停/取消）不再弹绿色「已提交」提示 */
+  const runAction = (
+    action: () => Promise<unknown>,
+    options?: { onSuccess?: () => void; skipNotice?: boolean },
+  ): void => {
     setBusy(true);
     setActionError(null);
     setActionNotice(null);
     action()
       .then(() => {
-        onSuccess?.();
-        flashNotice('已提交');
+        options?.onSuccess?.();
+        if (!options?.skipNotice) flashNotice('已提交');
         void runsApi
           .get(runId)
           .then(setSummary)
@@ -353,6 +376,7 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
           .events(runId)
           .then((fresh) => {
             eventsRef.current = fresh;
+            seenSeqsRef.current = new Set(fresh.map((event) => event.seq));
             summaryCacheRef.current = new Map(fresh.map((event) => [event.seq, eventSummary(event)]));
             payloadJsonCacheRef.current = new Map(
               fresh.map((event) => [event.seq, stringifyPayload(event.payload)]),
@@ -375,7 +399,7 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
     runAction(
       () => runsApi.humanInput(runId, { approved, input: parseHumanInputText(humanInputText) }),
       // 成功后才清空输入：失败时保留用户写的审批意见
-      () => setHumanInputText(''),
+      { onSuccess: () => setHumanInputText('') },
     );
   };
 
@@ -414,6 +438,10 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
   // 暂停/取消请求已被受理、等待生效（旧后端无该字段时为 undefined，行为不变）
   const pauseRequested = summary?.pauseRequested === true;
   const cancelRequested = summary?.cancelRequested === true;
+  // 孤儿运行：原工作流已删除；后端未上线 workflowDeleted 字段前，以 workflowName 兜底值兼容
+  const workflowDeleted =
+    summary?.workflowDeleted === true ||
+    summary?.workflowName === WORKFLOW_DELETED_NAME_FALLBACK;
 
   if (notFound) {
     return (
@@ -466,7 +494,8 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
                 variant="secondary"
                 disabled={busy || pauseRequested}
                 title={pauseRequested ? '暂停请求已提交，等待生效' : undefined}
-                onClick={() => runAction(() => runsApi.pause(runId))}
+                // 琥珀横幅已覆盖反馈，不再弹绿色「已提交」，避免双重提示
+                onClick={() => runAction(() => runsApi.pause(runId), { skipNotice: true })}
               >
                 {pauseRequested ? '暂停中…' : '暂停'}
               </Button>
@@ -486,7 +515,8 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
                 variant="dangerOutline"
                 disabled={busy || cancelRequested}
                 title={cancelRequested ? '取消请求已提交，等待生效' : undefined}
-                onClick={() => runAction(() => runsApi.cancel(runId))}
+                // 琥珀横幅已覆盖反馈，不再弹绿色「已提交」，避免双重提示
+                onClick={() => runAction(() => runsApi.cancel(runId), { skipNotice: true })}
               >
                 {cancelRequested ? '取消中…' : '取消'}
               </Button>
@@ -512,6 +542,13 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
           </button>
         )}
       </header>
+
+      {/* 原工作流已删除：中性提示条，说明该运行基于历史定义快照 */}
+      {workflowDeleted && (
+        <p className="border-b border-neutral-200 bg-neutral-100 px-4 py-2 text-xs text-neutral-600">
+          原工作流已删除，此运行基于历史定义快照
+        </p>
+      )}
 
       {/* Human 审批表单 */}
       {summary?.status === 'waiting_human' && summary.waitingHuman && (
@@ -658,7 +695,11 @@ export function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => 
           </aside>
 
           {/* 事件时间轴（回放时游标之后的事件淡化；超长时只渲染最近 N 条；行可点击展开完整 payload） */}
-          <div ref={timelineRef} className="min-w-0 flex-1 overflow-auto bg-neutral-50 p-4">
+          <div
+            ref={timelineRef}
+            onScroll={handleTimelineScroll}
+            className="min-w-0 flex-1 overflow-auto bg-neutral-50 p-4"
+          >
             <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">
               事件时间轴（{events.length}
               {events.length > MAX_VISIBLE_EVENTS ? `，仅显示最近 ${MAX_VISIBLE_EVENTS} 条` : ''}）

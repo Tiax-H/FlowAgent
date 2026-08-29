@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 import { EventStore } from '../src/engine/event-store.service';
 import { PrismaService } from '../src/prisma/prisma.service';
-import { RunsService } from '../src/runs/runs.service';
+import { RunsService, parseRunsListLimit } from '../src/runs/runs.service';
 import { MemoryEventStore } from './engine-harness';
 
 interface RunRecord {
@@ -26,7 +26,7 @@ interface RunRecord {
   hiddenAt: Date | null;
 }
 
-function makeRun(id: string): RunRecord {
+function makeRun(id: string, overrides: Partial<RunRecord> = {}): RunRecord {
   return {
     id,
     workflowId: 'wf_1',
@@ -40,27 +40,38 @@ function makeRun(id: string): RunRecord {
     endedAt: null,
     createdAt: new Date(),
     hiddenAt: null,
+    ...overrides,
   };
 }
 
-function makeService(): {
+function makeService(runRows: RunRecord[] = [makeRun('run_a'), makeRun('run_b')]): {
   service: RunsService;
   runs: Map<string, RunRecord>;
   eventStore: MemoryEventStore;
 } {
-  const runs = new Map<string, RunRecord>();
-  runs.set('run_a', makeRun('run_a'));
-  runs.set('run_b', makeRun('run_b'));
+  const runs = new Map(runRows.map((row) => [row.id, row]));
   const runModel = {
     findMany: ({
       where,
+      orderBy,
+      take,
     }: {
       where?: { hiddenAt?: Date | null; workflowId?: string } | undefined;
-    }) =>
-      [...runs.values()]
-        .filter((row) => (where?.hiddenAt === null ? row.hiddenAt === null : true))
-        .filter((row) => (where?.workflowId ? row.workflowId === where.workflowId : true))
-        .map((row) => ({ ...row })),
+      orderBy?: Record<string, 'asc' | 'desc'>;
+      take?: number;
+    }) => {
+      let rows = [...runs.values()];
+      if (where?.hiddenAt === null) rows = rows.filter((row) => row.hiddenAt === null);
+      if (where?.workflowId) rows = rows.filter((row) => row.workflowId === where.workflowId);
+      const direction = (orderBy && 'createdAt' in orderBy ? orderBy.createdAt : 'desc') ?? 'desc';
+      rows.sort((a, b) =>
+        direction === 'asc'
+          ? a.createdAt.getTime() - b.createdAt.getTime()
+          : b.createdAt.getTime() - a.createdAt.getTime(),
+      );
+      if (take !== undefined) rows = rows.slice(0, take);
+      return rows.map((row) => ({ ...row }));
+    },
     findUnique: ({ where }: { where: { id: string } }): RunRecord | null => {
       const row = runs.get(where.id);
       return row ? { ...row } : null;
@@ -146,5 +157,106 @@ describe('RunsService 删除运行（软删）', () => {
     expect(detail.id).toBe('run_a');
     expect(detail.workflowName).toBe('示例工作流');
     expect(await service.getEvents('run_a')).toHaveLength(1);
+  });
+});
+
+/**
+ * 运行列表 workflowDeleted 标志（UX 问题 C）：
+ * 所属工作流记录已不存在时为 true（历史遗留孤儿 run），前端据此展示「原工作流已删除」横幅；
+ * 工作流存在时字段缺省（不出现）。
+ */
+describe('RunsService workflowDeleted 标志', () => {
+  it('所属工作流仍存在 → 列表/详情均不带 workflowDeleted 字段', async () => {
+    const { service } = makeService([makeRun('run_a')]);
+
+    const list = await service.listRuns();
+    expect(list[0]?.workflowName).toBe('示例工作流');
+    expect(list[0]).not.toHaveProperty('workflowDeleted');
+
+    const detail = await service.getRun('run_a');
+    expect(detail.workflowName).toBe('示例工作流');
+    expect(detail).not.toHaveProperty('workflowDeleted');
+  });
+
+  it('所属工作流已删除（记录不存在）→ workflowName 兜底「(已删除)」且 workflowDeleted: true', async () => {
+    const { service } = makeService([
+      makeRun('run_a'),
+      makeRun('run_ghost', { workflowId: 'wf_ghost' }),
+    ]);
+
+    const list = await service.listRuns();
+    const ghost = list.find((row) => row.id === 'run_ghost');
+    expect(ghost?.workflowName).toBe('(已删除)');
+    expect(ghost?.workflowDeleted).toBe(true);
+    const alive = list.find((row) => row.id === 'run_a');
+    expect(alive?.workflowDeleted).toBeUndefined();
+
+    const detail = await service.getRun('run_ghost');
+    expect(detail.workflowName).toBe('(已删除)');
+    expect(detail.workflowDeleted).toBe(true);
+  });
+});
+
+/**
+ * 运行列表 limit 参数（UX 问题 J-2）：
+ * 默认 100、上限 500、非法值回退默认；按 createdAt 倒序取前 N。
+ */
+describe('RunsService 运行列表 limit', () => {
+  function rowsByTime(count: number): RunRecord[] {
+    const base = Date.now();
+    return Array.from({ length: count }, (_, index) =>
+      makeRun(`run_${String(index).padStart(3, '0')}`, { createdAt: new Date(base + index) }),
+    );
+  }
+
+  it('缺省 limit 时默认 100 条（第 101 条起截断）', async () => {
+    const { service } = makeService(rowsByTime(105));
+    const list = await service.listRuns();
+    expect(list).toHaveLength(100);
+    // createdAt 倒序：最新在前
+    expect(list[0]?.id).toBe('run_104');
+  });
+
+  it('limit=N 按现有排序取前 N 条', async () => {
+    const { service } = makeService(rowsByTime(5));
+    const list = await service.listRuns(undefined, 2);
+    expect(list.map((row) => row.id)).toEqual(['run_004', 'run_003']);
+  });
+
+  it('limit 超过剩余条数时返回全部', async () => {
+    const { service } = makeService(rowsByTime(3));
+    expect(await service.listRuns(undefined, 10)).toHaveLength(3);
+  });
+
+  it('按 workflowId 过滤时 limit 同样生效', async () => {
+    const { service } = makeService([
+      ...rowsByTime(3),
+      makeRun('run_other', { workflowId: 'wf_2', createdAt: new Date() }),
+    ]);
+    const list = await service.listRuns('wf_2', 5);
+    expect(list.map((row) => row.id)).toEqual(['run_other']);
+  });
+});
+
+describe('parseRunsListLimit', () => {
+  it('缺省/空串回退默认 100', () => {
+    expect(parseRunsListLimit(undefined)).toBe(100);
+    expect(parseRunsListLimit('')).toBe(100);
+    expect(parseRunsListLimit('   ')).toBe(100);
+  });
+
+  it('非法值（非数字/小数/0/负数/科学计数以外的怪值）回退默认 100', () => {
+    expect(parseRunsListLimit('abc')).toBe(100);
+    expect(parseRunsListLimit('1.5')).toBe(100);
+    expect(parseRunsListLimit('0')).toBe(100);
+    expect(parseRunsListLimit('-5')).toBe(100);
+    expect(parseRunsListLimit('NaN')).toBe(100);
+  });
+
+  it('超过上限 500 截断为 500，合法值原样返回', () => {
+    expect(parseRunsListLimit('501')).toBe(500);
+    expect(parseRunsListLimit('999999')).toBe(500);
+    expect(parseRunsListLimit('1')).toBe(1);
+    expect(parseRunsListLimit('250')).toBe(250);
   });
 });

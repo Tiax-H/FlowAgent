@@ -149,7 +149,17 @@ export function McpServersPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 p-6">
-      <h1 className="text-lg font-semibold">MCP Servers</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-lg font-semibold">MCP Servers</h1>
+        <Button
+          variant="secondary"
+          disabled={busy}
+          title="重新拉取 Server 连接状态与工具注册表"
+          onClick={() => void refresh()}
+        >
+          刷新
+        </Button>
+      </div>
       {error && <p className="rounded bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
 
       <section className="rounded-lg border border-neutral-200 bg-white p-4">

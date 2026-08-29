@@ -31,12 +31,32 @@ export interface RunControlIntent {
  * 运行详情 DTO = 共享 RunSummary + 控制面意图标志。
  * pauseRequested/cancelRequested 仅在「已请求但尚未生效」时为 true（缺省即 false），
  * 前端据此展示「暂停已请求，将在当前节点结束后生效」。
+ * workflowDeleted 仅在所属工作流记录已不存在时为 true（缺省即 false），
+ * 前端据此在运行详情页展示「原工作流已删除」横幅。
  */
 export interface RunDetailSummary extends RunSummary {
   /** 暂停已请求但尚未生效：将在当前节点结束后落 RUN_SUSPENDED */
   pauseRequested?: boolean;
   /** 取消已请求但尚未生效：将在当前节点结束后落 RUN_CANCELED */
   cancelRequested?: boolean;
+  /** 所属工作流记录已不存在（如历史遗留的孤儿 run）：前端展示「原工作流已删除」横幅 */
+  workflowDeleted?: boolean;
+}
+
+/** 运行列表默认返回条数 */
+export const RUNS_LIST_DEFAULT_LIMIT = 100;
+/** 运行列表单次返回条数上限 */
+export const RUNS_LIST_MAX_LIMIT = 500;
+
+/**
+ * 解析运行列表 ?limit= 查询参数：非法（非正整数/空）回退默认 100，超过 500 截断为 500。
+ * 与控制器共用，保证「非法值回退默认」只有一份实现。
+ */
+export function parseRunsListLimit(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return RUNS_LIST_DEFAULT_LIMIT;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) return RUNS_LIST_DEFAULT_LIMIT;
+  return Math.min(parsed, RUNS_LIST_MAX_LIMIT);
 }
 
 function parseJson<T>(raw: string | null, fallback: T): T {
@@ -117,12 +137,17 @@ export class RunsService implements OnModuleInit {
    * 节点级明细留给详情页（getRun）。缓存列在运行中由控制面动作刷新，
    * 状态变化粒度（running→终态）对本页足够。
    * 软删（hiddenAt 非空）的 run 不出现在列表中。
+   * limit 为返回条数（须经 parseRunsListLimit 规范化：默认 100、上限 500），
+   * 按现有 createdAt 倒序取前 N；所属工作流已删除的 run 额外携带 workflowDeleted: true。
    */
-  async listRuns(workflowId?: string): Promise<RunDetailSummary[]> {
+  async listRuns(
+    workflowId?: string,
+    limit: number = RUNS_LIST_DEFAULT_LIMIT,
+  ): Promise<RunDetailSummary[]> {
     const rows = await this.prisma.workflowRun.findMany({
       where: workflowId ? { workflowId, hiddenAt: null } : { hiddenAt: null },
       orderBy: { createdAt: 'desc' },
-      take: 100,
+      take: limit,
     });
     const workflowIds = [...new Set(rows.map((row) => row.workflowId))];
     const workflows = await this.prisma.workflow.findMany({
@@ -130,7 +155,10 @@ export class RunsService implements OnModuleInit {
       select: { id: true, name: true },
     });
     const names = new Map(workflows.map((workflow) => [workflow.id, workflow.name]));
-    return rows.map((row) => this.toCachedSummary(row, names.get(row.workflowId) ?? '(已删除)'));
+    return rows.map((row) => {
+      const name = names.get(row.workflowId);
+      return this.toCachedSummary(row, name ?? '(已删除)', name === undefined);
+    });
   }
 
   /** 轻量状态查询（bridge 轮询用）：只读缓存列，零事件回放 */
@@ -139,13 +167,14 @@ export class RunsService implements OnModuleInit {
     return { id: row.id, status: row.status };
   }
 
+  /** 运行详情：所属工作流已删除时携带 workflowDeleted: true 供前端展示横幅 */
   async getRun(runId: string): Promise<RunDetailSummary> {
     const row = await this.ensureRun(runId);
     const workflow = await this.prisma.workflow.findUnique({
       where: { id: row.workflowId },
       select: { name: true },
     });
-    return this.toSummary(row, workflow?.name ?? '(已删除)');
+    return this.toSummary(row, workflow?.name ?? '(已删除)', workflow === null);
   }
 
   async getEvents(runId: string): Promise<WorkflowEvent[]> {
@@ -214,8 +243,12 @@ export class RunsService implements OnModuleInit {
     }
   }
 
-  /** 纯缓存列摘要（列表页）：nodes 为空，节点明细见 getRun */
-  private toCachedSummary(row: RunRow, workflowName: string): RunDetailSummary {
+  /** 纯缓存列摘要（列表页）：nodes 为空，节点明细见 getRun；工作流缺失时带 workflowDeleted 标志 */
+  private toCachedSummary(
+    row: RunRow,
+    workflowName: string,
+    workflowDeleted: boolean,
+  ): RunDetailSummary {
     const summary: RunDetailSummary = {
       id: row.id,
       workflowId: row.workflowId,
@@ -230,6 +263,7 @@ export class RunsService implements OnModuleInit {
       endedAt: row.endedAt ? row.endedAt.toISOString() : null,
       waitingHuman: null,
     };
+    if (workflowDeleted) summary.workflowDeleted = true;
     this.applyControlIntent(summary, row.id);
     return summary;
   }
@@ -241,7 +275,11 @@ export class RunsService implements OnModuleInit {
     if (intent.cancelRequested) summary.cancelRequested = true;
   }
 
-  private async toSummary(row: RunRow, workflowName: string): Promise<RunDetailSummary> {
+  private async toSummary(
+    row: RunRow,
+    workflowName: string,
+    workflowDeleted: boolean,
+  ): Promise<RunDetailSummary> {
     const events = await this.eventStore.readEvents(row.id);
     const state = events.length > 0 ? projectRunState(row.id, events) : emptyRunState(row.id);
 
@@ -268,6 +306,7 @@ export class RunsService implements OnModuleInit {
       endedAt: state.endedAt,
       waitingHuman: this.resolveWaitingHuman(state, events, nodeMetas),
     };
+    if (workflowDeleted) summary.workflowDeleted = true;
     this.applyControlIntent(summary, row.id);
     return summary;
   }

@@ -1,4 +1,5 @@
 import type { Edge, Node, XYPosition } from '@xyflow/react';
+import type { WorkflowVariable } from '@flowagent/shared';
 import type { NodeType, WorkflowDefinition, WorkflowEdge, WorkflowNode } from './types';
 
 let idCounter = 0;
@@ -35,6 +36,23 @@ export const NODE_DEFAULT_NAMES: Record<NodeType, string> = {
 };
 
 /**
+ * 画布不直接编辑的 definition 顶层元数据：加载/导入时暂存进编辑器状态，
+ * 保存时经 flowToDefinition 的 base 透传，否则一次保存就会静默剥离。
+ */
+export interface DefinitionExtras {
+  description?: string;
+  variables?: WorkflowVariable[];
+}
+
+/** 从原 definition 提取顶层 description/variables（仅取存在的键，避免保存时写入 undefined 噪声） */
+export function extractDefinitionExtras(definition: WorkflowDefinition): DefinitionExtras {
+  return {
+    ...(definition.description !== undefined ? { description: definition.description } : {}),
+    ...(definition.variables !== undefined ? { variables: definition.variables } : {}),
+  };
+}
+
+/**
  * WorkflowDefinition（契约）→ React Flow 节点/边。
  * 节点级顶层字段（timeoutMs/retry）暂存进 data.__nodeExtras，
  * 画布暂无编辑入口但不丢失：保存/导出时还原（见 flowToDefinition）。
@@ -65,7 +83,11 @@ export function definitionToFlow(definition: WorkflowDefinition): { nodes: Node[
   return { nodes, edges };
 }
 
-/** React Flow 节点/边 → WorkflowDefinition（契约）；__nodeExtras 还原为节点顶层字段 */
+/**
+ * React Flow 节点/边 → WorkflowDefinition（契约）；__nodeExtras 还原为节点顶层字段。
+ * base 中除 nodes/edges 外的顶层字段（name/description/variables）原样保留——
+ * 调用方须把画布当前 name 与暂存的 description/variables 组装进 base。
+ */
 export function flowToDefinition(
   nodes: Node[],
   edges: Edge[],

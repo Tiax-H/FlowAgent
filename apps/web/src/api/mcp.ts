@@ -38,6 +38,10 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     throw cause;
   }
   if (!response.ok) {
+    // 后端 JSON body 上限 1MB：413 统一映射为中文提示，不透出裸状态码
+    if (response.status === 413) {
+      throw new Error('输入内容超过 1MB 上限，请精简后重试');
+    }
     const body = (await response.json().catch(() => null)) as { message?: string } | null;
     throw new Error(body?.message ?? `HTTP ${response.status}`);
   }

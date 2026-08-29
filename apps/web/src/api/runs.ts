@@ -27,6 +27,10 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     throw cause;
   }
   if (!response.ok) {
+    // 后端 JSON body 上限 1MB：413 统一映射为中文提示，不透出裸状态码
+    if (response.status === 413) {
+      throw new HttpError('输入内容超过 1MB 上限，请精简后重试', 413);
+    }
     const body = (await response.json().catch(() => null)) as { message?: string } | null;
     throw new HttpError(body?.message ?? `HTTP ${response.status}`, response.status);
   }
@@ -39,7 +43,9 @@ export const runsApi = {
       method: 'POST',
       body: JSON.stringify({ input: input ?? null }),
     }),
-  list: () => request<RunSummary[]>('/api/runs'),
+  /** limit 传参时只取最近 N 条（后端默认 100、上限 500；老后端忽略该参数返回全量） */
+  list: (limit?: number) =>
+    request<RunSummary[]>(limit ? `/api/runs?limit=${limit}` : '/api/runs'),
   get: (runId: string) => request<RunSummary>(`/api/runs/${runId}`),
   events: (runId: string) => request<WorkflowEvent[]>(`/api/runs/${runId}/events`),
   pause: (runId: string) => request<{ ok: true }>(`/api/runs/${runId}/pause`, { method: 'POST' }),

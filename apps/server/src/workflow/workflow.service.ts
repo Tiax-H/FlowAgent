@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
   UnprocessableEntityException,
@@ -91,7 +92,9 @@ export class WorkflowService {
   }
 
   async update(id: string, dto: UpdateWorkflowDto): Promise<WorkflowResponseDto> {
-    await this.ensureExists(id);
+    const row = await this.prisma.workflow.findUnique({ where: { id } });
+    if (!row) throw new NotFoundException(`工作流不存在: ${id}`);
+    this.assertExpectedVersion(dto.expectedVersion, row.version);
     if (dto.name !== undefined) this.assertName(dto.name);
     if (dto.definition !== undefined) this.assertDefinition(dto.definition);
 
@@ -108,13 +111,42 @@ export class WorkflowService {
       data.version = { increment: 1 };
     }
 
-    const row = await this.prisma.workflow.update({ where: { id }, data });
-    return toResponse(row);
+    const updated = await this.prisma.workflow.update({ where: { id }, data });
+    return toResponse(updated);
   }
 
+  /**
+   * 删除工作流，并级联软删其全部运行记录：两条写在同一事务内，
+   * 避免删掉工作流后运行残留为孤儿（列表兜底「(已删除)」却仍可 retry 重跑）。
+   * 运行复用软删机制（hiddenAt 标记，列表/详情/SSE/控制面一律按 404 处理）；
+   * 事件表 append-only，不做任何事件清理。
+   */
   async remove(id: string): Promise<void> {
     await this.ensureExists(id);
-    await this.prisma.workflow.delete({ where: { id } });
+    await this.prisma.$transaction([
+      this.prisma.workflowRun.updateMany({
+        where: { workflowId: id, hiddenAt: null },
+        data: { hiddenAt: new Date() },
+      }),
+      this.prisma.workflow.delete({ where: { id } }),
+    ]);
+  }
+
+  /**
+   * 乐观锁校验（PATCH expectedVersion）：提供且不等于当前版本 → 409 Conflict，
+   * 响应体含当前版本号供前端提示「请刷新后重试」；未提供保持旧行为（向后兼容）。
+   */
+  private assertExpectedVersion(expectedVersion: unknown, currentVersion: number): void {
+    if (expectedVersion === undefined) return;
+    if (typeof expectedVersion !== 'number' || !Number.isInteger(expectedVersion)) {
+      throw new BadRequestException('expectedVersion 必须为整数');
+    }
+    if (expectedVersion !== currentVersion) {
+      throw new ConflictException({
+        message: `工作流已被其他会话修改（当前版本 v${currentVersion}），请刷新后重试`,
+        currentVersion,
+      });
+    }
   }
 
   private async ensureExists(id: string): Promise<void> {

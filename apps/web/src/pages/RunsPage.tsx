@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { WorkflowEvent } from '@flowagent/shared';
 
 import { runsApi } from '../api/runs';
 import { formatDuration, shortenText } from '../lib/format';
@@ -14,6 +13,9 @@ function toUserMessage(cause: unknown): string {
       ? cause.message
       : String(cause);
 }
+
+/** 列表拉取条数（后端默认 100、上限 500）：打满时提示「仅显示最近 N 条」 */
+const LIST_LIMIT = 200;
 
 type StatusFilter = 'all' | 'running' | 'completed' | 'failed' | 'suspended';
 
@@ -39,22 +41,6 @@ function runElapsed(run: RunSummaryWithFlags, now: number): string {
   return formatDuration(Math.max(0, (Number.isNaN(ended) ? now : ended) - started));
 }
 
-/** 从事件列表倒序找最后一条失败事件，取中文 errorHint，旧事件回退为 error 截断 */
-function extractFailureHint(events: WorkflowEvent[]): string | null {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
-    if (!event || (event.type !== 'NODE_FAILED' && event.type !== 'RUN_FAILED')) continue;
-    const payload = (event.payload ?? {}) as Record<string, unknown>;
-    if (typeof payload.errorHint === 'string' && payload.errorHint.trim() !== '') {
-      return payload.errorHint;
-    }
-    if (typeof payload.error === 'string' && payload.error.trim() !== '') {
-      return shortenText(payload.error, 80);
-    }
-  }
-  return null;
-}
-
 export function RunsPage({
   onOpenRun,
   onGoWorkflows,
@@ -66,14 +52,16 @@ export function RunsPage({
   const [error, setError] = useState<string | null>(null);
   /** 首次加载是否已完成（完成前显示骨架行，避免闪现空状态） */
   const [initialLoaded, setInitialLoaded] = useState(false);
+  /** 返回条数达到拉取上限：列表可能被截断 */
+  const [truncated, setTruncated] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
-  /** 失败运行的错误摘要缓存（runId → 摘要；null 表示未能取得） */
-  const [failureHints, setFailureHints] = useState<Record<string, string | null>>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      setRuns(await runsApi.list());
+      const list = await runsApi.list(LIST_LIMIT);
+      setRuns(list);
+      setTruncated(list.length >= LIST_LIMIT);
       setError(null);
     } catch (cause) {
       setError(toUserMessage(cause));
@@ -90,31 +78,6 @@ export function RunsPage({
     }, 3000);
     return () => clearInterval(timer);
   }, [refresh]);
-
-  // 失败运行懒加载最后一条失败事件，生成「错误摘要」列（只取一次，失败则缓存空）
-  useEffect(() => {
-    const pending = runs.filter(
-      (run) => run.status === 'failed' && !(run.id in failureHints),
-    );
-    if (pending.length === 0) return;
-    let cancelled = false;
-    void Promise.all(
-      pending.map(async (run): Promise<[string, string | null]> => {
-        try {
-          const events = await runsApi.events(run.id);
-          return [run.id, extractFailureHint(events)];
-        } catch {
-          return [run.id, null];
-        }
-      }),
-    ).then((entries) => {
-      if (cancelled) return;
-      setFailureHints((previous) => ({ ...previous, ...Object.fromEntries(entries) }));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [runs, failureHints]);
 
   async function handleDelete(run: RunSummaryWithFlags) {
     if (!window.confirm(`删除运行「${run.workflowName}」？事件记录将一并移除，此操作不可恢复。`)) {
@@ -176,6 +139,9 @@ export function RunsPage({
           );
         })}
       </div>
+      {truncated && (
+        <p className="mb-3 text-xs text-neutral-400">仅显示最近 {LIST_LIMIT} 条运行</p>
+      )}
       {!initialLoaded ? (
         <LoadingRows rows={4} />
       ) : runs.length === 0 && !error ? (
@@ -194,46 +160,44 @@ export function RunsPage({
         <p className="text-sm text-neutral-400">该状态下暂无运行记录</p>
       ) : (
         <ul className="space-y-2">
-          {visibleRuns.map((run) => {
-            const hint = run.status === 'failed' ? failureHints[run.id] : undefined;
-            return (
-              <li key={run.id} className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => onOpenRun(run.id)}
-                  className="min-w-0 flex-1 rounded-lg border border-neutral-200 bg-white p-3 text-left transition-colors hover:border-neutral-400"
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="min-w-0 truncate text-sm font-medium">{run.workflowName}</span>
-                    <RunStatusBadge status={run.status} />
-                    <span className="shrink-0 text-xs text-neutral-400">v{run.workflowVersion}</span>
-                    <span className="ml-auto shrink-0 text-xs text-neutral-400">
-                      {run.startedAt ? new Date(run.startedAt).toLocaleString('zh-CN') : '—'}
+          {visibleRuns.map((run) => (
+            <li key={run.id} className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onOpenRun(run.id)}
+                className="min-w-0 flex-1 rounded-lg border border-neutral-200 bg-white p-3 text-left transition-colors hover:border-neutral-400"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="min-w-0 truncate text-sm font-medium">{run.workflowName}</span>
+                  <RunStatusBadge status={run.status} />
+                  <span className="shrink-0 text-xs text-neutral-400">v{run.workflowVersion}</span>
+                  <span className="ml-auto shrink-0 text-xs text-neutral-400">
+                    {run.startedAt ? new Date(run.startedAt).toLocaleString('zh-CN') : '—'}
+                  </span>
+                </div>
+                <div className="mt-1 flex items-center gap-3 text-xs">
+                  <span className="shrink-0 text-neutral-400">耗时 {runElapsed(run, now)}</span>
+                  {run.status === 'failed' && (
+                    <span
+                      className="min-w-0 flex-1 truncate text-red-500"
+                      title={run.error ?? undefined}
+                    >
+                      {/* 错误摘要直接取列表接口的 error 字段（新事件已是中文摘要），截断展示、悬停看全文 */}
+                      {run.error ? shortenText(run.error, 80) : '—'}
                     </span>
-                  </div>
-                  <div className="mt-1 flex items-center gap-3 text-xs">
-                    <span className="shrink-0 text-neutral-400">耗时 {runElapsed(run, now)}</span>
-                    {run.status === 'failed' && (
-                      <span
-                        className="min-w-0 flex-1 truncate text-red-500"
-                        title={hint ?? undefined}
-                      >
-                        {hint === undefined ? '读取错误详情…' : (hint ?? '未能读取错误详情')}
-                      </span>
-                    )}
-                  </div>
-                </button>
-                <Button
-                  variant="dangerOutline"
-                  disabled={deletingId === run.id}
-                  title="删除该运行记录"
-                  onClick={() => void handleDelete(run)}
-                >
-                  删除
-                </Button>
-              </li>
-            );
-          })}
+                  )}
+                </div>
+              </button>
+              <Button
+                variant="dangerOutline"
+                disabled={deletingId === run.id}
+                title="删除该运行记录"
+                onClick={() => void handleDelete(run)}
+              >
+                删除
+              </Button>
+            </li>
+          ))}
         </ul>
       )}
     </div>

@@ -11,9 +11,10 @@ function agentNode(data: Record<string, unknown>): WorkflowNode {
 
 function makeEmit(events: WorkflowEvent[]) {
   let seq = 0;
-  return async (type: WorkflowEvent['type'], payload: Record<string, unknown>) => {
+  return async (type: WorkflowEvent['type'], payload: Record<string, unknown>): Promise<number> => {
     seq += 1;
     events.push({ runId: 'r', seq, type, payload, timestamp: new Date().toISOString() });
+    return seq;
   };
 }
 

@@ -1,6 +1,6 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Query } from '@nestjs/common';
 
-import { RunsService } from './runs.service';
+import { RunsService, parseRunsListLimit } from './runs.service';
 
 @Controller()
 export class RunsController {
@@ -15,9 +15,13 @@ export class RunsController {
     return { runId };
   }
 
+  /**
+   * 运行列表：?limit= 控制返回条数（默认 100，上限 500，非法值回退默认），
+   * 按 createdAt 倒序取前 N。所属工作流已删除的 run 携带 workflowDeleted: true。
+   */
   @Get('runs')
-  async listRuns(): Promise<unknown[]> {
-    return this.runsService.listRuns();
+  async listRuns(@Query('limit') limit?: string): Promise<unknown[]> {
+    return this.runsService.listRuns(undefined, parseRunsListLimit(limit));
   }
 
   @Get('runs/:id')

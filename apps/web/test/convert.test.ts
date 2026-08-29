@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { WorkflowDefinition } from '@flowagent/shared';
 
-import { definitionToFlow, flowToDefinition } from '../src/workflow/convert';
+import { definitionToFlow, extractDefinitionExtras, flowToDefinition } from '../src/workflow/convert';
 
 const definition: WorkflowDefinition = {
   schemaVersion: 1,
@@ -95,5 +95,72 @@ describe('节点级 timeoutMs/retry 往返保留（2026-08-22 复审修复）', 
     const start = restored.nodes.find((item) => item.id === 'start');
     expect(start?.data.__nodeExtras).toBeUndefined();
     expect(start?.timeoutMs).toBeUndefined();
+  });
+});
+
+describe('definition 顶层 description/variables 往返保留（2026-08-29 复审修复）', () => {
+  const withExtras: WorkflowDefinition = {
+    schemaVersion: 1,
+    name: '带元数据的工作流',
+    description: '含变量与描述，画布保存后必须原样保留',
+    variables: [
+      { name: 'region', type: 'string', required: true, default: 'cn-north' },
+      { name: 'threshold', type: 'number' },
+      { name: 'enabled', type: 'boolean', default: false },
+    ],
+    nodes: [
+      { id: 'start', type: 'start', name: '开始', position: { x: 0, y: 0 }, data: {} },
+      {
+        id: 'llm_1',
+        type: 'llm',
+        name: '引用变量',
+        position: { x: 200, y: 0 },
+        data: { provider: 'p', model: 'm', prompt: '区域：{{variables.region}}' },
+      },
+      { id: 'end', type: 'end', name: '结束', position: { x: 400, y: 0 }, data: {} },
+    ],
+    edges: [
+      { id: 'e1', source: 'start', target: 'llm_1' },
+      { id: 'e2', source: 'llm_1', target: 'end' },
+    ],
+  };
+
+  it('加载 → 保存 往返后 description/variables 逐字段等价', () => {
+    const flow = definitionToFlow(withExtras);
+    // 模拟编辑器保存：base 由「画布当前名 + 暂存的顶层元数据」组装（与编辑器保存链路一致）
+    const restored = flowToDefinition(flow.nodes, flow.edges, {
+      schemaVersion: 1,
+      name: '画布上改过的名字',
+      ...extractDefinitionExtras(withExtras),
+      nodes: [],
+      edges: [],
+    });
+    // name 用画布当前值，不得被旧值覆盖
+    expect(restored.name).toBe('画布上改过的名字');
+    // nodes/edges 之外的顶层字段原样保留
+    expect(restored.description).toBe(withExtras.description);
+    expect(restored.variables).toEqual(withExtras.variables);
+    expect(restored.variables?.[0]).toEqual({
+      name: 'region',
+      type: 'string',
+      required: true,
+      default: 'cn-north',
+    });
+    expect(restored.nodes).toEqual(withExtras.nodes);
+    expect(restored.edges).toEqual(withExtras.edges);
+  });
+
+  it('无 description/variables 的定义保存后不新增空字段', () => {
+    const flow = definitionToFlow(definition);
+    const restored = flowToDefinition(flow.nodes, flow.edges, {
+      schemaVersion: 1,
+      name: 'plain',
+      ...extractDefinitionExtras(definition),
+      nodes: [],
+      edges: [],
+    });
+    expect(restored.description).toBeUndefined();
+    expect(restored.variables).toBeUndefined();
+    expect(Object.keys(restored).sort()).toEqual(['edges', 'name', 'nodes', 'schemaVersion']);
   });
 });

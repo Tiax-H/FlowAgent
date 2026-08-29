@@ -540,14 +540,35 @@ function ToolArgsForm({
               <span className="text-[10px] text-neutral-400">{property.type}</span>
             </div>
             {property.type === 'boolean' ? (
-              <label className="flex items-center gap-2 text-xs text-neutral-600">
-                <input
-                  type="checkbox"
-                  checked={current === true}
-                  onChange={(event) => setArg(property.name, event.target.checked)}
-                />
-                {current === undefined ? '未设置' : current === true ? 'true' : 'false'}
-              </label>
+              <select
+                value={
+                  current === undefined
+                    ? ''
+                    : current === true
+                      ? 'true'
+                      : current === false
+                        ? 'false'
+                        : '__raw__'
+                }
+                onChange={(event) => {
+                  const next = event.target.value;
+                  // 三态与运行输入表单一致：不传 = 从参数里移除该键
+                  if (next === '') setArg(property.name, undefined);
+                  else if (next === 'true') setArg(property.name, true);
+                  else if (next === 'false') setArg(property.name, false);
+                }}
+                className={inputClass}
+              >
+                <option value="">不传（保持未设置）</option>
+                <option value="true">true</option>
+                <option value="false">false</option>
+                {/* 兼容已有 definition 里经原始 JSON 写入的非布尔值：只展示，不静默改写 */}
+                {current !== undefined && current !== true && current !== false && (
+                  <option value="__raw__">
+                    当前值 {JSON.stringify(current)}（非布尔，选择 true/false 将覆盖）
+                  </option>
+                )}
+              </select>
             ) : property.type === 'number' ? (
               <NumberInput
                 value={typeof current === 'number' ? current : undefined}

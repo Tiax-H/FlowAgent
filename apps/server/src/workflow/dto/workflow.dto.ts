@@ -8,6 +8,12 @@ export interface UpdateWorkflowDto {
   name?: string;
   description?: string | null;
   definition?: unknown;
+  /**
+   * 乐观锁（并发保存冲突检测）：提供时必须等于服务端当前 version，否则返回 409
+   * （响应体含 currentVersion 供前端提示刷新）。未提供保持旧行为（后写者胜，向后兼容）。
+   * 仅 definition 变更会递增 version。
+   */
+  expectedVersion?: number;
 }
 
 /** 详情响应：含完整 definition（编辑器与运行前输入解析用） */

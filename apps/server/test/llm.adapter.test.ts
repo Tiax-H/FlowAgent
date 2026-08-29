@@ -80,19 +80,22 @@ describe('LlmAdapter（无网络路径）', () => {
 });
 
 describe('classifyUpstreamStatus', () => {
-  it('404 → model_not_found；401/403 → auth；429 → rate_limited；5xx → upstream_error', () => {
+  it('404 → model_not_found；401 → auth；403 → forbidden；429 → rate_limited；5xx → upstream_error', () => {
     expect(classifyUpstreamStatus(404).category).toBe('model_not_found');
     expect(classifyUpstreamStatus(401).category).toBe('auth');
-    expect(classifyUpstreamStatus(403).category).toBe('auth');
+    expect(classifyUpstreamStatus(403).category).toBe('forbidden');
     expect(classifyUpstreamStatus(429).category).toBe('rate_limited');
     expect(classifyUpstreamStatus(500).category).toBe('upstream_error');
     expect(classifyUpstreamStatus(503).category).toBe('upstream_error');
     expect(classifyUpstreamStatus(400).category).toBe('invalid_request');
   });
 
-  it('每个归类都携带中文 hint', () => {
+  it('每个归类都携带中文 hint（401 密钥问题与 403 无权访问分开提示）', () => {
     expect(classifyUpstreamStatus(404).hint).toBe('模型不存在或已下线');
     expect(classifyUpstreamStatus(401).hint).toBe('密钥无效或额度不足');
+    expect(classifyUpstreamStatus(403).hint).toBe(
+      '无权访问该模型（可能密钥权限不足、模型未开通或地域受限）',
+    );
     expect(classifyUpstreamStatus(429).hint).toBe('上游限流，请稍后重试');
     expect(classifyUpstreamStatus(500).hint).toBe('上游服务错误');
   });
@@ -128,11 +131,26 @@ describe('LlmAdapter 错误归类（mock 上游响应）', () => {
     expect(error.message).not.toContain('sk-secret-key');
   });
 
-  it('401/403 归类为 auth（密钥无效或额度不足），message 不含上游 "Insufficient balance" 原文', async () => {
+  it('401 归类为 auth（密钥无效或额度不足），message 不含上游 "Insufficient balance" 原文', async () => {
     const error = await captureError(401, '{"error":{"message":"Insufficient balance"}}');
     expect(error.classification.category).toBe('auth');
     expect(error.message).toBe('密钥无效或额度不足（上游 401）');
     expect(error.message).not.toContain('Insufficient');
+  });
+
+  it('403 归类为 forbidden（无权访问该模型），message 不含上游 "not available in your region" 原文', async () => {
+    const error = await captureError(
+      403,
+      "This model is not available in your region (request id: 9527)",
+    );
+    expect(error.classification.category).toBe('forbidden');
+    expect(error.classification.hint).toBe(
+      '无权访问该模型（可能密钥权限不足、模型未开通或地域受限）',
+    );
+    expect(error.message).toBe('无权访问该模型（可能密钥权限不足、模型未开通或地域受限）（上游 403）');
+    expect(error.statusCode).toBe(403);
+    expect(error.message).not.toContain('not available in your region');
+    expect(error.message).not.toContain('sk-secret-key');
   });
 
   it('429 归类为 rate_limited', async () => {

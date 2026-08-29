@@ -45,6 +45,7 @@ export interface LlmCompletionResult {
 export type LlmErrorCategory =
   | 'model_not_found'
   | 'auth'
+  | 'forbidden'
   | 'rate_limited'
   | 'invalid_request'
   | 'upstream_error'
@@ -56,6 +57,7 @@ export type LlmErrorCategory =
 export const LLM_ERROR_HINTS: Record<LlmErrorCategory, string> = {
   model_not_found: '模型不存在或已下线',
   auth: '密钥无效或额度不足',
+  forbidden: '无权访问该模型（可能密钥权限不足、模型未开通或地域受限）',
   rate_limited: '上游限流，请稍后重试',
   invalid_request: '请求被上游拒绝',
   upstream_error: '上游服务错误',
@@ -76,7 +78,8 @@ const UPSTREAM_EXCERPT_LIMIT = 200;
 
 /**
  * 将上游 HTTP 状态归类（adapter 边界与连通性测试端点共用同一套映射，不得各写一份）。
- * 未列出的 4xx 一律归为 invalid_request（请求被上游拒绝）。
+ * 401 与 403 分开归类：401 是密钥/额度问题；403 常是聚合平台的「模型无权限/地域受限」，
+ * 一律提示密钥问题会误导排障。未列出的 4xx 一律归为 invalid_request（请求被上游拒绝）。
  */
 export function classifyUpstreamStatus(statusCode: number): {
   category: LlmErrorCategory;
@@ -85,8 +88,11 @@ export function classifyUpstreamStatus(statusCode: number): {
   if (statusCode === 404) {
     return { category: 'model_not_found', hint: LLM_ERROR_HINTS.model_not_found };
   }
-  if (statusCode === 401 || statusCode === 403) {
+  if (statusCode === 401) {
     return { category: 'auth', hint: LLM_ERROR_HINTS.auth };
+  }
+  if (statusCode === 403) {
+    return { category: 'forbidden', hint: LLM_ERROR_HINTS.forbidden };
   }
   if (statusCode === 429) {
     return { category: 'rate_limited', hint: LLM_ERROR_HINTS.rate_limited };

@@ -15,12 +15,19 @@ for (let dir = process.cwd(); ; dir = resolve(dir, '..')) {
 for (const path of dotenvPaths) loadDotenv({ path });
 
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 
 import { AppModule } from './app.module';
+import { configureJsonBodyParser } from './body-parser';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule);
+  // bodyParser: false + 显式注册 1MB JSON 解析器（默认 100KB 对工作流定义偏小），
+  // 并把 body-parser 的英文裸 413/400 映射为中文 JSON（见 body-parser.ts）
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    bodyParser: false,
+  });
   app.setGlobalPrefix('api');
+  configureJsonBodyParser(app);
   // 安全默认值：CORS 白名单（Vite dev server），可用 CORS_ORIGINS 环境变量扩展；
   // 监听 loopback（可用 HOST=0.0.0.0 显式放开，远程使用请自行加反向代理与鉴权）
   const corsOrigins = (process.env.CORS_ORIGINS ?? 'http://localhost:5173,http://127.0.0.1:5173')

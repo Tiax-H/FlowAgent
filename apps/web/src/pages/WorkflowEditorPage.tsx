@@ -19,12 +19,18 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { validateWorkflowDefinition, type NodeType } from '@flowagent/shared';
 
-import { workflowsApi } from '../api/workflows';
+import { workflowsApi, WorkflowApiError } from '../api/workflows';
 import { Button } from '../components/ui';
 import { FlowAgentNode } from '../workflow/components/FlowAgentNode';
 import { NodePalette } from '../workflow/components/NodePalette';
 import { PropertyPanel } from '../workflow/components/PropertyPanel';
-import { createFlowNode, definitionToFlow, flowToDefinition } from '../workflow/convert';
+import {
+  createFlowNode,
+  definitionToFlow,
+  extractDefinitionExtras,
+  flowToDefinition,
+  type DefinitionExtras,
+} from '../workflow/convert';
 import { exportFileName, parseImportedWorkflow } from '../workflow/import';
 import type { WorkflowRecord } from '../workflow/types';
 
@@ -56,10 +62,17 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [record, setRecord] = useState<WorkflowRecord | null>(null);
   const [name, setName] = useState('');
+  /**
+   * 画布不直接编辑的 definition 顶层元数据（description/variables）：
+   * 加载/导入时暂存，保存/导出时透传，否则一次保存就会静默剥离。
+   */
+  const [definitionExtras, setDefinitionExtras] = useState<DefinitionExtras>({});
   /** 仅放 validateWorkflowDefinition 的结果；加载/保存/导入失败走各自的错误通道 */
   const [errors, setErrors] = useState<string[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  /** 保存冲突（409）：后端当前版本；null 表示无冲突 */
+  const [conflict, setConflict] = useState<{ currentVersion: number | null } | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const [saved, setSaved] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -131,9 +144,11 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
     // 切换工作流（或新建）：清空撤销栈，避免把上一个画布的节点恢复回来
     undoStackRef.current = [];
     setLastDeletion(null);
+    setConflict(null);
     if (workflowId === null) {
       setRecord(null);
       setName('未命名工作流');
+      setDefinitionExtras({});
       setNodes([
         createFlowNode('start', { x: 80, y: 200 }),
         createFlowNode('end', { x: 640, y: 200 }),
@@ -154,6 +169,9 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
         setRecord(loaded);
         setName(loaded.name);
         if (loaded.definition) {
+          // 顶层 description/variables 画布不编辑：暂存起来，保存时透传防剥离
+          const extras = extractDefinitionExtras(loaded.definition);
+          setDefinitionExtras(extras);
           const flow = definitionToFlow(loaded.definition);
           setNodes(flow.nodes);
           setEdges(flow.edges);
@@ -161,10 +179,14 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
             flowToDefinition(flow.nodes, flow.edges, {
               schemaVersion: 1,
               name: loaded.name,
+              ...extras,
               nodes: [],
               edges: [],
             }),
           );
+        } else {
+          // 详情接口未返回定义（异常后端）：清空暂存，避免沿用上一个工作流的元数据
+          setDefinitionExtras({});
         }
       })
       .catch((cause: unknown) => {
@@ -293,15 +315,57 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
     [nodes, edges, setNodes, setEdges, pushDeletion, nodeDisplayName],
   );
 
+  /**
+   * 属性面板统一入口：写回节点 data；若本次补丁改了 Condition 分支列表，
+   * 按下标对应关系把改名的分支 id 联动到该节点出边的 sourceHandle，防止编辑期悬空边。
+   */
+  const handleNodeDataChange = useCallback(
+    (node: Node, patch: Record<string, unknown>) => {
+      setNodes((current) =>
+        current.map((item) =>
+          item.id === node.id ? { ...item, data: { ...item.data, ...patch } } : item,
+        ),
+      );
+      const previousBranches = node.data['branches'];
+      const nextBranches = patch['branches'];
+      if (!Array.isArray(previousBranches) || !Array.isArray(nextBranches)) return;
+      const renames = new Map<string, string>();
+      const common = Math.min(previousBranches.length, nextBranches.length);
+      for (let index = 0; index < common; index += 1) {
+        const oldId = (previousBranches[index] as { id?: unknown } | null)?.id;
+        const newId = (nextBranches[index] as { id?: unknown } | null)?.id;
+        // 清空中的中间态（空串）不联动，等用户敲出合法 id 再更新
+        if (
+          typeof oldId === 'string' &&
+          typeof newId === 'string' &&
+          oldId !== newId &&
+          newId !== ''
+        ) {
+          renames.set(oldId, newId);
+        }
+      }
+      if (renames.size === 0) return;
+      setEdges((current) =>
+        current.map((edge) => {
+          if (edge.source !== node.id || edge.sourceHandle == null) return edge;
+          const renamed = renames.get(edge.sourceHandle);
+          return renamed ? { ...edge, sourceHandle: renamed } : edge;
+        }),
+      );
+    },
+    [setNodes, setEdges],
+  );
+
   const definition = useMemo(
     () =>
       flowToDefinition(nodes, edges, {
         schemaVersion: 1,
         name,
+        ...definitionExtras,
         nodes: [],
         edges: [],
       }),
-    [nodes, edges, name],
+    [nodes, edges, name, definitionExtras],
   );
 
   /** 最近一次落盘（加载或保存）的定义快照，用于 dirty 判断 */
@@ -372,6 +436,7 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
     setBusy(true);
     setSaved(null);
     setActionError(null);
+    setConflict(null);
     const result = validateWorkflowDefinition(definition);
     if (!result.valid) {
       setErrors(result.errors);
@@ -380,7 +445,12 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
     }
     setErrors([]);
     try {
-      const body = { name, definition: { ...definition, name } };
+      const body = {
+        name,
+        definition: { ...definition, name },
+        // 乐观锁：用加载/上次保存落库的版本（record.version），不是本次保存后的；老后端忽略该字段
+        ...(record ? { expectedVersion: record.version } : {}),
+      };
       const savedRecord = record
         ? await workflowsApi.update(record.id, body)
         : await workflowsApi.create(body);
@@ -389,6 +459,11 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
       savedSnapshotRef.current = definitionJson;
       return savedRecord;
     } catch (cause) {
+      // 409 版本冲突：单独冲突条呈现（带重新加载），不混入普通错误提示
+      if (cause instanceof WorkflowApiError && cause.status === 409) {
+        setConflict({ currentVersion: cause.currentVersion ?? null });
+        return null;
+      }
       // 请求失败不混入校验红框，单独提示
       setActionError(`保存失败：${cause instanceof Error ? cause.message : String(cause)}`);
       return null;
@@ -396,6 +471,13 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
       setBusy(false);
     }
   }, [definition, name, record, definitionJson]);
+
+  /** 冲突后重新加载：走现有加载逻辑整体覆盖画布；dirty 时与导入一致先确认 */
+  const handleConflictReload = useCallback(() => {
+    if (dirty && !window.confirm('画布有未保存修改，重新加载将覆盖当前内容，确定继续？')) return;
+    setConflict(null);
+    handleRetryLoad();
+  }, [dirty, handleRetryLoad]);
 
   // 全局 Ctrl/Cmd+S 触发保存：仅在有未保存改动且非保存中时生效
   useEffect(() => {
@@ -423,8 +505,12 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
         setActionError(null);
         setErrors([]);
         setSaved(null);
+        setConflict(null);
         setRecord(null);
         setName(result.value.name);
+        // 导入的顶层元数据同样暂存，保存时透传
+        const extras = extractDefinitionExtras(result.value.definition);
+        setDefinitionExtras(extras);
         const flow = definitionToFlow(result.value.definition);
         setNodes(flow.nodes);
         setEdges(flow.edges);
@@ -432,10 +518,14 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
           flowToDefinition(flow.nodes, flow.edges, {
             schemaVersion: 1,
             name: result.value.name,
+            ...extras,
             nodes: [],
             edges: [],
           }),
         );
+        // 导入整体覆盖画布：旧画布的撤销命令必须作废，否则 Ctrl+Z 会把旧节点拼回新画布
+        undoStackRef.current = [];
+        setLastDeletion(null);
       })
       .catch((cause: unknown) =>
         setActionError(`导入失败：${cause instanceof Error ? cause.message : String(cause)}`),
@@ -573,6 +663,23 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
               <p className="text-xs font-medium text-red-600">{actionError}</p>
             </div>
           )}
+          {conflict && (
+            <div className="flex items-center gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2">
+              <p className="min-w-0 flex-1 text-xs font-medium text-amber-800">
+                {conflict.currentVersion !== null
+                  ? `工作流已被其他会话修改（当前版本 v${conflict.currentVersion}），请刷新后重试`
+                  : '工作流已被其他会话修改，请刷新后重试'}
+              </p>
+              <Button
+                variant="secondary"
+                disabled={busy}
+                title="丢弃本地画布改动，重新读取服务端最新版本"
+                onClick={handleConflictReload}
+              >
+                重新加载
+              </Button>
+            </div>
+          )}
           <div className="flex min-h-0 flex-1">
             <NodePalette onAdd={handleAddNode} />
             <div className="relative min-w-0 flex-1">
@@ -622,15 +729,7 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
         {selectedNode && (
           <PropertyPanel
             node={selectedNode}
-            onChange={(patch) =>
-              setNodes((current) =>
-                current.map((node) =>
-                  node.id === selectedNode.id
-                    ? { ...node, data: { ...node.data, ...patch } }
-                    : node,
-                ),
-              )
-            }
+            onChange={(patch) => handleNodeDataChange(selectedNode, patch)}
             onDelete={() => handleDelete(selectedNode.id)}
           />
         )}
