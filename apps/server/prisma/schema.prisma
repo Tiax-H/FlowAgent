@@ -81,6 +81,20 @@ model McpServer {
   @@map("mcp_servers")
 }
 
+/// 网页端保存的 LLM Provider 配置；与环境变量配置互斥（name 不可与 env 解析结果同名）。
+/// apiKeyEncrypted 为 AES-256-GCM 密文（格式 v1:<iv>:<tag>:<data>），主密钥来自 FLOWAGENT_SECRET_KEY
+model ProviderConfig {
+  name            String   @id
+  baseURL         String
+  apiKeyEncrypted String
+  /// 逗号分隔的模型列表，语义与环境变量 FLOWAGENT_PROVIDERS_<NAME>__MODELS 一致
+  models          String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("provider_configs")
+}
+
 /// 工具注册表（discovery 投影落库）；server 重连时全量替换
 model McpTool {
   id           String    @id @default(cuid())

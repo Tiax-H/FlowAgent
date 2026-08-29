@@ -2,7 +2,8 @@
  * LLM Adapter：OpenAI 兼容客户端（自定义 baseURL，支持聚合平台）。
  *
  * 架构红线：任何模块不得直接 import 厂商 SDK，只能通过本适配层。
- * API key 只从环境变量读取，严禁写入日志、事件流或数据库。
+ * API key 只来自环境变量或 Provider 配置表（AES-256-GCM 加密存储），
+ * 严禁写入日志、事件流；数据库仅存密文。
  */
 
 export interface LlmToolDefinition {
@@ -199,24 +200,52 @@ export function parseProviderConfigs(
   return providers;
 }
 
-function normalizeBaseUrl(baseUrl: string): string {
+/** 末尾斜杠归一（env 解析与网页端保存共用，保证 baseURL 语义一致） */
+export function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, '');
 }
 
 /** Provider 连通性测试结果 */
-export type ProviderTestOutcome =
-  | { ok: true; latencyMs: number }
-  | { ok: false; message: string };
+export type ProviderTestOutcome = { ok: true; latencyMs: number } | { ok: false; message: string };
+
+/**
+ * Provider 配置解析器：每次调用返回当前生效的配置快照。
+ * 网页端保存 Provider 后下一次调用即拿到新配置（热生效，无需重启）。
+ */
+export type LlmProviderResolver = () => Map<string, LlmProviderConfig>;
+
+/**
+ * 合并 env 与数据库两路 Provider 配置（并集）。
+ * 两个命名空间按约定互斥（数据库不可创建与环境变量同名的 Provider）；
+ * 防御性处理：万一同名，以数据库条目覆盖。
+ */
+export function mergeProviderConfigs(
+  envProviders: Map<string, LlmProviderConfig>,
+  dbProviders: Map<string, LlmProviderConfig>,
+): Map<string, LlmProviderConfig> {
+  const merged = new Map(envProviders);
+  for (const [name, config] of dbProviders) merged.set(name, config);
+  return merged;
+}
 
 export class LlmAdapter {
-  private readonly providers: Map<string, LlmProviderConfig>;
+  private readonly resolver: LlmProviderResolver;
 
-  constructor(providers: Map<string, LlmProviderConfig>) {
-    this.providers = providers;
+  /**
+   * @param source 配置解析器；也兼容直接传入静态 Map（等价于恒定 resolver）
+   */
+  constructor(source: LlmProviderResolver | Map<string, LlmProviderConfig>) {
+    this.resolver = source instanceof Map ? () => source : source;
   }
 
+  /** 环境变量路径：构造时解析一次，resolver 恒返回同一 Map（env 在进程内不变） */
   static fromEnv(env: NodeJS.ProcessEnv = process.env): LlmAdapter {
-    return new LlmAdapter(parseProviderConfigs(env));
+    const providers = parseProviderConfigs(env);
+    return new LlmAdapter(providers);
+  }
+
+  private get providers(): Map<string, LlmProviderConfig> {
+    return this.resolver();
   }
 
   /** 是否存在可用 Provider（供启动日志/健康检查，不暴露 key） */
@@ -302,17 +331,15 @@ export class LlmAdapter {
     } catch (error) {
       if (error instanceof LlmProviderError) throw error;
       if (error instanceof Error && error.name === 'AbortError') {
-        throw new LlmProviderError(
-          `请求超时（${request.timeoutMs ?? 120_000}ms）`,
-          providerName,
-          { category: 'timeout', hint: LLM_ERROR_HINTS.timeout },
-        );
+        throw new LlmProviderError(`请求超时（${request.timeoutMs ?? 120_000}ms）`, providerName, {
+          category: 'timeout',
+          hint: LLM_ERROR_HINTS.timeout,
+        });
       }
-      throw new LlmProviderError(
-        LLM_ERROR_HINTS.network,
-        providerName,
-        { category: 'network', hint: LLM_ERROR_HINTS.network },
-      );
+      throw new LlmProviderError(LLM_ERROR_HINTS.network, providerName, {
+        category: 'network',
+        hint: LLM_ERROR_HINTS.network,
+      });
     } finally {
       clearTimeout(timeout);
     }
@@ -338,8 +365,7 @@ export class LlmAdapter {
     } catch (error) {
       return {
         ok: false,
-        message:
-          error instanceof LlmProviderError ? error.message : '测试请求失败，请稍后重试',
+        message: error instanceof LlmProviderError ? error.message : '测试请求失败，请稍后重试',
       };
     }
   }

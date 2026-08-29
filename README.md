@@ -50,6 +50,8 @@ pnpm db:migrate             # 建表（SQLite，首次必做）
 pnpm dev                    # 同时启动 server(:3000) 与 web(:5173)
 ```
 
+> 除环境变量外，服务端设置 `FLOWAGENT_SECRET_KEY` 后，还可在 Web 设置页直接增删改查 Provider（密钥加密存储、保存即生效）。
+
 > 安全默认值：server 只监听 `127.0.0.1`，CORS 仅放行本地前端。远程使用请自行置于反向代理与鉴权之后（`HOST`/`CORS_ORIGINS` 环境变量可调）。Docker 一键部署在 Roadmap v0.4（尚未提供 compose 文件）。
 
 ### 把工作流当工具用（Workflow→MCP Bridge）
