@@ -229,6 +229,24 @@ describe('LlmAdapter 错误归类（mock 上游响应）', () => {
     });
     expect(extractLlmErrorFields(new Error('普通错误'))).toEqual({});
   });
+
+  it('HTTP 200 + 网关错误包（无 choices）归类为 invalid_response，提示检查 Base URL', async () => {
+    const error = await captureError(200, '{"code":500,"msg":"404 NOT_FOUND","success":false}');
+    expect(error.classification.category).toBe('invalid_response');
+    expect(error.message).toContain('Base URL');
+    expect(error.message).toContain('OpenAI 兼容');
+    expect(error.classification.upstreamExcerpt).toContain('404 NOT_FOUND');
+  });
+
+  it('HTTP 200 + Anthropic 格式响应归类为 invalid_response，提示改用 OpenAI 兼容端点', async () => {
+    const error = await captureError(
+      200,
+      '{"content":[{"type":"text","text":"好的"}],"stop_reason":"end_turn"}',
+    );
+    expect(error.classification.category).toBe('invalid_response');
+    expect(error.message).toContain('Anthropic');
+    expect(error.message).toContain('open.bigmodel.cn/api/paas/v4');
+  });
 });
 
 describe('LlmAdapter.testProvider（连通性测试）', () => {

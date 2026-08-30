@@ -107,6 +107,31 @@ describe('Agent ReAct 执行器', () => {
     expect(events.map((event) => event.type)).toEqual(['LLM_REQUESTED', 'LLM_COMPLETED']);
   });
 
+  it('模型返回空回复（无 content 且无工具调用）时显式失败而非静默成功', async () => {
+    const events: WorkflowEvent[] = [];
+    const emit = makeEmit(events);
+
+    const runtime: NodeRuntimeServices = {
+      llm: {
+        // 实测场景：Base URL 误配为 Anthropic 兼容端点时，网关 200 + 错误包被解析成空 content
+        chatCompletion: async () => ({ content: null, toolCalls: undefined }),
+      },
+      callTool: async () => ({ ok: true, result: [] }),
+      listToolSchemas: async () => [],
+    };
+
+    const executor = createAgentExecutor(runtime);
+    await expect(
+      executor({
+        node: agentNode({ provider: 'test', model: 'fake', prompt: '你好' }),
+        context: { input: {}, variables: {}, nodeOutputs: {} },
+        emit,
+      }),
+    ).rejects.toThrow(/空回复/);
+    // 失败路径不得发射 LLM_COMPLETED（否则时间轴出现「成功的空回复」）
+    expect(events.map((event) => event.type)).toEqual(['LLM_REQUESTED']);
+  });
+
   it('达到 maxIterations 上限收敛为提示文本', async () => {
     const events: WorkflowEvent[] = [];
     const emit = makeEmit(events);

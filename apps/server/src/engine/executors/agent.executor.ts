@@ -87,6 +87,13 @@ export function createAgentExecutor(services: NodeRuntimeServices): NodeExecutor
 
       // 无工具调用：终轮
       if (!result.toolCalls || result.toolCalls.length === 0) {
+        if (!result.content || result.content.trim() === '') {
+          // 空回复不可能是有效的最终答案：与其让节点带着占位文本「成功」并污染下游，
+          // 不如显式失败，把排查方向（Base URL 非开放AI兼容端点 / 模型名错误）直接给用户
+          throw new Error(
+            '模型返回了空回复（无 content 且无工具调用）。常见原因：Provider 的 Base URL 不是 OpenAI 兼容端点（例如误用了 Anthropic 兼容地址），或模型名不正确',
+          );
+        }
         finalContent = result.content;
         await emit('LLM_COMPLETED', {
           nodeId: node.id,

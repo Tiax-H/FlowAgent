@@ -52,7 +52,8 @@ export type LlmErrorCategory =
   | 'upstream_error'
   | 'timeout'
   | 'network'
-  | 'provider_not_configured';
+  | 'provider_not_configured'
+  | 'invalid_response';
 
 /** 各归类的中文一句话提示（单一事实源，事件流 errorHint 与测试端点共用） */
 export const LLM_ERROR_HINTS: Record<LlmErrorCategory, string> = {
@@ -65,6 +66,7 @@ export const LLM_ERROR_HINTS: Record<LlmErrorCategory, string> = {
   timeout: '请求超时',
   network: '无法连接上游服务',
   provider_not_configured: 'Provider 未配置或缺少 baseURL/apiKey',
+  invalid_response: '上游返回了非 OpenAI 兼容格式的响应，请检查 Base URL',
 };
 
 /** 结构化归类结果：hint 为中文提示；upstreamExcerpt 为上游原文截断脱敏摘录 */
@@ -319,6 +321,22 @@ export class LlmAdapter {
         }>;
         usage?: { prompt_tokens?: number; completion_tokens?: number };
       };
+      if (!Array.isArray(data.choices)) {
+        // 非 OpenAI 兼容响应：常见于误配了 Anthropic 兼容端点，或网关对错误路径
+        // 返回 HTTP 200 + 错误包（实测智谱 /api/anthropic 会回 {"code":500,"msg":"404 NOT_FOUND"}）。
+        // 必须在此显式失败，否则解析成空 content，引擎会把空回复误报为「达到最大轮数」。
+        const raw = JSON.stringify(data) ?? '';
+        const looksLikeAnthropic =
+          !('success' in data) && Array.isArray((data as { content?: unknown }).content);
+        const hint = looksLikeAnthropic
+          ? '上游返回了 Anthropic 格式响应——该 Base URL 是 Anthropic 兼容端点，与本应用不兼容，请改用 OpenAI 兼容端点（例如智谱使用 https://open.bigmodel.cn/api/paas/v4）'
+          : '上游响应缺少 choices 字段，Base URL 可能不是 OpenAI 兼容端点（例如智谱应使用 https://open.bigmodel.cn/api/paas/v4，OpenAI 使用 https://api.openai.com/v1）';
+        throw new LlmProviderError(hint, providerName, {
+          category: 'invalid_response',
+          hint,
+          ...(raw ? { upstreamExcerpt: excerptUpstreamBody(raw, [provider.apiKey]) } : {}),
+        });
+      }
       const choice = data.choices?.[0]?.message;
       return {
         content: choice?.content ?? null,
