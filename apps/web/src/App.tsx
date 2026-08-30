@@ -702,6 +702,10 @@ function RunInputDialog({
         <p className="mt-3 text-xs text-faint">正在读取工作流定义…</p>
       ) : (
         <div className="mt-2">
+          <p className="mb-2 text-xs leading-relaxed text-muted-foreground">
+            运行输入 = 本次任务的参数。字段来自 Start 节点的输入 Schema 与节点提示词中的{' '}
+            {'{{input.xxx}}'} 引用，运行时注入对应位置。
+          </p>
           <div className="mb-2 flex items-center gap-2">
             <span className="text-xs text-muted-foreground">输入方式：</span>
             <div className="inline-flex rounded-md bg-muted-strong p-0.5">

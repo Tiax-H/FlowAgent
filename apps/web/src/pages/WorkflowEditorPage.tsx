@@ -765,6 +765,7 @@ function EditorCanvas({ workflowId, onBack, onRun, onDirtyChange }: EditorProps)
             node={selectedNode}
             onChange={(patch) => handleNodeDataChange(selectedNode, patch)}
             onDelete={() => handleDelete(selectedNode.id)}
+            definition={definition}
           />
         )}
           </div>

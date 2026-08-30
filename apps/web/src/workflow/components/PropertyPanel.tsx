@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useReactFlow, type Node } from '@xyflow/react';
 import type {
   AgentNodeData,
@@ -13,6 +13,7 @@ import type {
   StartNodeData,
   ToolNodeData,
   TransformNodeData,
+  WorkflowDefinition,
   WorkflowSubgraph,
 } from '@flowagent/shared';
 
@@ -20,6 +21,7 @@ import { mcpApi, type McpTool } from '../../api/mcp';
 import { providersApi, type ProviderInfo } from '../../api/providers';
 import { CheckIcon, XIcon } from '../../components/icons';
 import { Button, confirmDialog } from '../../components/ui';
+import { collectInputFieldNames } from '../../lib/inputSkeleton';
 import { NODE_TYPE_META } from '../types';
 
 /** 同画布其他节点的摘要，供「插入引用」生成 {{节点id.output}} */
@@ -34,6 +36,8 @@ interface PropertyPanelProps {
   onDelete: () => void;
   /** 同画布其他节点摘要；缺省时自动从 ReactFlow 实例读取（无 Provider 环境则降级为空列表） */
   peerNodes?: PeerNode[];
+  /** 当前画布对应的完整工作流定义：Start 面板用它汇总全图 {{input.*}} 引用；缺省时按无字段降级 */
+  definition?: WorkflowDefinition;
 }
 
 interface NodeDataShape extends Record<string, unknown> {
@@ -204,6 +208,39 @@ function TemplateInsertRow({ peers, onInsert }: { peers: PeerNode[]; onInsert: (
         </button>
       ))}
     </div>
+  );
+}
+
+/**
+ * Start 面板的「运行输入字段」只读说明区：汇总全图 {{input.*}} 顶层字段名，
+ * 让「任务在运行时输入」这条线索在编辑器里可见。无字段时给出如何声明的中性引导。
+ */
+function RunInputFieldsBlock({ fieldNames }: { fieldNames: string[] }) {
+  return (
+    <FieldBlock label="运行输入字段" hint="只读">
+      {fieldNames.length > 0 ? (
+        <>
+          <div className="flex flex-wrap gap-1">
+            {fieldNames.map((name) => (
+              <span
+                key={name}
+                className="max-w-full truncate rounded-md bg-muted px-1.5 py-0.5 text-2xs text-muted-foreground"
+              >
+                {name}
+              </span>
+            ))}
+          </div>
+          <p className="text-2xs text-faint">
+            点右上角『运行』后在弹窗中填写这些字段——这就是本次任务的入口。
+          </p>
+        </>
+      ) : (
+        <p className="text-2xs text-faint">
+          尚未声明运行输入：可在下方输入 Schema 中定义，或在任意 Agent/LLM
+          提示词中插入 {'{{input.任务名}}'} 引用，运行时会自动生成填写框。
+        </p>
+      )}
+    </FieldBlock>
   );
 }
 
@@ -1036,7 +1073,7 @@ function buildSubgraphSkeleton(): WorkflowSubgraph {
   };
 }
 
-export function PropertyPanel({ node, onChange, onDelete, peerNodes }: PropertyPanelProps) {
+export function PropertyPanel({ node, onChange, onDelete, peerNodes, definition }: PropertyPanelProps) {
   const data = node.data as NodeDataShape;
   const meta = NODE_TYPE_META[data.nodeType];
   const [tools, setTools] = useState<McpTool[]>([]);
@@ -1095,6 +1132,12 @@ export function PropertyPanel({ node, onChange, onDelete, peerNodes }: PropertyP
   }
   const peers: PeerNode[] = peerNodes ?? flowPeers;
 
+  /** 全图 {{input.*}} 顶层字段名：Start 面板「运行输入字段」说明区的数据源 */
+  const inputFieldNames = useMemo(
+    () => (definition ? collectInputFieldNames(definition) : []),
+    [definition],
+  );
+
   return (
     <aside className="flex w-72 shrink-0 flex-col overflow-auto border-l border-border bg-card p-4">
       <header className="mb-3 flex items-center gap-2">
@@ -1127,13 +1170,16 @@ export function PropertyPanel({ node, onChange, onDelete, peerNodes }: PropertyP
         </Field>
 
         {data.nodeType === 'start' && (
-          <Field label="输入 Schema（JSON，可选）" hint="声明运行输入结构，下游用 {{input.xxx}} 引用">
-            <JsonField
-              value={(data as unknown as StartNodeData).inputSchema ?? {}}
-              onChange={(inputSchema) => onChange({ inputSchema })}
-              rows={5}
-            />
-          </Field>
+          <>
+            <RunInputFieldsBlock fieldNames={inputFieldNames} />
+            <Field label="输入 Schema（JSON，可选）" hint="声明运行输入结构，下游用 {{input.xxx}} 引用">
+              <JsonField
+                value={(data as unknown as StartNodeData).inputSchema ?? {}}
+                onChange={(inputSchema) => onChange({ inputSchema })}
+                rows={5}
+              />
+            </Field>
+          </>
         )}
 
         {data.nodeType === 'end' && (

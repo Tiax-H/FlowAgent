@@ -39,9 +39,10 @@ export function NodePalette({
           </button>
         );
       })}
-      <p className="mt-auto text-2xs leading-tight text-faint">
-        拖拽或点击添加节点；点选节点/连线后按 Delete 删除
-      </p>
+      <div className="mt-auto space-y-1 text-2xs leading-tight text-faint">
+        <p>拖拽或点击添加节点；点选节点/连线后按 Delete 删除</p>
+        <p>任务内容在点『运行』后的输入框中填写，节点提示词用 {'{{input.xxx}}'} 引用</p>
+      </div>
     </aside>
   );
 }
